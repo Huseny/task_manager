@@ -1,0 +1,53 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.x
+    commands:
+      - echo "Installing dependencies..."
+      - pip install gdown
+      -  # Ensure docker-compose is available (usually pre-installed in Standard images)
+      - docker-compose version
+
+  pre_build:
+    commands:
+      - echo "Downloading project from Google Drive..."
+      -  # Extract the File ID from the URL and download
+      - gdown --fuzzy "$GDRIVE_URL" -O project_bundle.zip
+
+      - echo "Unzipping project..."
+      - unzip project_bundle.zip -d extracted_project
+
+      - echo "Navigating to project and validating structure..."
+      # This handles your requirement of being at the parent level or root
+      - cd extracted_project
+      - python3 ../validator.py
+
+  build:
+    commands:
+      - echo "Validation passed. Starting Docker services..."
+      # Use -d to run in background, --build to ensure fresh images
+      - docker-compose up -d
+
+      - echo "Executing test suite..."
+      # Check which script exists and run it
+      - |
+        if [ -f "run_tests.sh" ]; then
+          chmod +x run_tests.sh && ./run_tests.sh
+        elif [ -f "run_test.sh" ]; then
+          chmod +x run_test.sh && ./run_test.sh
+        else
+          echo "Test script not found despite validation!" && exit 1
+        fi
+
+  post_build:
+    commands:
+      - echo "Build process completed on `date`"
+      - docker-compose down
+      - echo "Findings recorded."
+
+artifacts:
+  files:
+    - "**/*"
+  name: validated-project-$(date +%Y-%m-%d)
