@@ -1,4 +1,3 @@
-import sys
 from pathlib import Path
 
 
@@ -35,7 +34,7 @@ def validate_structure():
             f"{Colors.FAIL}Error: Could not automatically detect project root.{Colors.ENDC}"
         )
         print("Ensure you are inside the TASK folder (containing metadata.json).")
-        sys.exit(1)
+        return False
 
     print(
         f"{Colors.HEADER}🚀 Validating Structure for: {Colors.BOLD}{root.name}/{Colors.ENDC}\n"
@@ -99,14 +98,14 @@ def validate_structure():
         print(
             f"{Colors.BOLD}{Colors.OKGREEN}PASSED: Structure is strictly compliant.{Colors.ENDC}"
         )
-        sys.exit(0)
+        return True
     else:
         print(
             f"{Colors.BOLD}{Colors.FAIL}FAILED: {len(errors)} structural issues found.{Colors.ENDC}"
         )
         for error in errors:
             print(f"  • {error}")
-        sys.exit(1)
+        return False
 
 
 if __name__ == "__main__":
