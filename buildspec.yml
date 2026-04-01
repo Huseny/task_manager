@@ -1,5 +1,10 @@
 version: 0.2
 
+env:
+  secrets-manager:
+    DOCKER_USER: "dockerhub/creds:username"
+    DOCKER_TOKEN: "dockerhub/creds:password"
+
 phases:
   install:
     runtime-versions:
@@ -21,9 +26,11 @@ phases:
 
   build:
     commands:
-      - echo "Navigating to the repo/ project directory..."
+      - echo "Validation passed. Navigating to the repo/ project directory..."
       - cd repo || exit 1
-      - echo "Validation passed. Starting Docker services..."
+      - echo "Starting Docker services..."
+      - echo "Logging in to Docker Hub..."
+      - echo "$DOCKER_TOKEN" | docker login --username "$DOCKER_USER" --password-stdin
       # Use -d to run in background, --build to ensure fresh images
       - docker-compose up -d
 
