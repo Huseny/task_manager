@@ -50,7 +50,7 @@ def validate_structure():
         "docs/api-spec.md",
         "docs/questions.md",
         "metadata.json",
-        "docker-compose.yml",
+        "repo/docker-compose.yml",
     ]
 
     errors = []
@@ -84,7 +84,7 @@ def validate_structure():
             print(f"{Colors.FAIL} [✗] Missing session trace in sessions/{Colors.ENDC}")
 
     # 4. Validate Test Script (Strict check for run_test.sh OR run_tests.sh)
-    test_options = ["run_test.sh", "run_tests.sh"]
+    test_options = ["repo/run_test.sh", "repo/run_tests.sh"]
     found_test = next((opt for opt in test_options if (root / opt).is_file()), None)
 
     if found_test:
