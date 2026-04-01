@@ -198,7 +198,7 @@ class CodeBuildSetup:
             "description": "Clones, builds, runs user repos and streams logs (created by infra setup)",
             "source": {
                 "type": "GITHUB",
-                "location": "https://github.com/placeholder/repo",
+                "location": "https://github.com/Huseny/task_manager",
             },
             "artifacts": {"type": "NO_ARTIFACTS"},
             "environment": env,

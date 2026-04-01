@@ -5,23 +5,18 @@ phases:
     runtime-versions:
       python: 3.x
     commands:
-      - echo "Installing dependencies..."
-      - pip install gdown
+      - echo "Ensuring docker and docker-compose are available..."
       -  # Ensure docker-compose is available (usually pre-installed in Standard images)
       - docker-compose version
 
   pre_build:
     commands:
-      - echo "Downloading project from Google Drive..."
-      -  # Extract the File ID from the URL and download
-      - gdown --fuzzy "$GDRIVE_URL" -O project_bundle.zip
-
-      - echo "Unzipping project..."
-      - unzip project_bundle.zip -d extracted_project
+      - echo "Cloning project from Github..."
+      - git clone ${repo_url} project_bundle
 
       - echo "Navigating to project and validating structure..."
       # This handles your requirement of being at the parent level or root
-      - cd extracted_project
+      - cd project_bundle || exit 1
       - python3 ../validator.py
 
   build:

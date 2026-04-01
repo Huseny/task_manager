@@ -52,8 +52,8 @@ def monitor_build(build_id):
 
 if __name__ == "__main__":
     # CONFIGURATION
-    PROJECT_NAME = "Your-CodeBuild-Project-Name"
-    TEST_URL = "https://drive.google.com/file/d/YOUR_FILE_ID/view?usp=sharing"
+    PROJECT_NAME = "TaskValidator"
+    TEST_URL = "https://drive.google.com/open?id=1zq4CH4sUgTL2OBxkbWHaVTyjPOeO2nfc"
 
     bid = start_codebuild_task(PROJECT_NAME, TEST_URL)
     monitor_build(bid)

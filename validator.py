@@ -16,15 +16,11 @@ def get_validation_root():
     """Detects whether we are inside the task folder or one level above."""
     cwd = Path.cwd()
 
-    # Scenario 1: Already in the root (metadata.json is here)
     if (cwd / "metadata.json").exists():
         return cwd
 
-    # Scenario 2: Parent folder (should only contain one task folder)
     subdirs = [d for d in cwd.iterdir() if d.is_dir() and not d.name.startswith(".")]
-
     if len(subdirs) == 1:
-        # Check if the single subdirectory looks like the root
         if (subdirs[0] / "metadata.json").exists():
             return subdirs[0]
 
@@ -38,17 +34,17 @@ def validate_structure():
         print(
             f"{Colors.FAIL}Error: Could not automatically detect project root.{Colors.ENDC}"
         )
-        print(
-            "Ensure you are either inside the TASK folder or in a directory containing ONLY the TASK folder."
-        )
+        print("Ensure you are inside the TASK folder (containing metadata.json).")
         sys.exit(1)
 
     print(
-        f"{Colors.HEADER}🚀 Validation Root Identified: {Colors.BOLD}{root.name}/{Colors.ENDC}\n"
+        f"{Colors.HEADER}🚀 Validating Structure for: {Colors.BOLD}{root.name}/{Colors.ENDC}\n"
     )
 
-    # Configuration of strict requirements
+    # 1. Mandatory Directories
     mandatory_dirs = ["docs", "repo", "sessions"]
+
+    # 2. Mandatory Files (Strictly from image + requirements)
     mandatory_files = [
         "docs/design.md",
         "docs/api-spec.md",
@@ -59,15 +55,15 @@ def validate_structure():
 
     errors = []
 
-    # 1. Validate Directories
+    # Validate Directories
     for d in mandatory_dirs:
         if (root / d).is_dir():
-            print(f"{Colors.OKGREEN} [✓] Directory: {d}{Colors.ENDC}")
+            print(f"{Colors.OKGREEN} [✓] Directory: {d}/{Colors.ENDC}")
         else:
             errors.append(f"Missing directory: {d}/")
-            print(f"{Colors.FAIL} [✗] Missing directory: {d}{Colors.ENDC}")
+            print(f"{Colors.FAIL} [✗] Missing directory: {d}/{Colors.ENDC}")
 
-    # 2. Validate Files
+    # Validate Files
     for f in mandatory_files:
         if (root / f).is_file():
             print(f"{Colors.OKGREEN} [✓] File: {f}{Colors.ENDC}")
@@ -75,7 +71,19 @@ def validate_structure():
             errors.append(f"Missing file: {f}")
             print(f"{Colors.FAIL} [✗] Missing file: {f}{Colors.ENDC}")
 
-    # 3. Validate Test Script (run_test.sh OR run_tests.sh)
+    # 3. Validate Session Files (Strict check for develop-N.json)
+    sessions_dir = root / "sessions"
+    if sessions_dir.is_dir():
+        session_files = list(sessions_dir.glob("develop-*.json"))
+        if session_files:
+            print(
+                f"{Colors.OKGREEN} [✓] Session trace found: {session_files[0].name}{Colors.ENDC}"
+            )
+        else:
+            errors.append("Missing session trace (sessions/develop-N.json)")
+            print(f"{Colors.FAIL} [✗] Missing session trace in sessions/{Colors.ENDC}")
+
+    # 4. Validate Test Script (Strict check for run_test.sh OR run_tests.sh)
     test_options = ["run_test.sh", "run_tests.sh"]
     found_test = next((opt for opt in test_options if (root / opt).is_file()), None)
 
@@ -85,7 +93,7 @@ def validate_structure():
         errors.append("Missing test script (run_test.sh or run_tests.sh)")
         print(f"{Colors.FAIL} [✗] Missing test script{Colors.ENDC}")
 
-    # Results
+    # Final Results
     print("\n" + "─" * 45)
     if not errors:
         print(
