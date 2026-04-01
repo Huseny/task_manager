@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 
 class Colors:
@@ -98,14 +99,14 @@ def validate_structure():
         print(
             f"{Colors.BOLD}{Colors.OKGREEN}PASSED: Structure is strictly compliant.{Colors.ENDC}"
         )
-        return True
+        sys.exit(0)
     else:
         print(
             f"{Colors.BOLD}{Colors.FAIL}FAILED: {len(errors)} structural issues found.{Colors.ENDC}"
         )
         for error in errors:
             print(f"  • {error}")
-        return False
+        sys.exit(1)
 
 
 if __name__ == "__main__":

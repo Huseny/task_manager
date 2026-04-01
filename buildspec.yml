@@ -1,6 +1,8 @@
 version: 0.2
 
 env:
+  variables:
+    REPORT_BUCKET: "mindflow_tasks_log"
   secrets-manager:
     DOCKER_USER: "dockerhub/creds:username"
     DOCKER_TOKEN: "dockerhub/creds:password"
@@ -18,11 +20,27 @@ phases:
     commands:
       - echo "Cloning project from Github..."
       - git clone ${repo_url} project_bundle
+      - export LOG_DIR="/tmp/build-logs"
+      - export COMBINED_LOG="$LOG_DIR/build-execution.log"
+      - export ERROR_MESSAGE_FILE="$LOG_DIR/error-message.txt"
+      - mkdir -p "$LOG_DIR"
+      - : > "$COMBINED_LOG"
+      - echo "errorMessage=none" > "$ERROR_MESSAGE_FILE"
 
       - echo "Navigating to project and validating structure..."
       # This handles your requirement of being at the parent level or root
       - cd project_bundle || exit 1
-      - python3 ../validator.py
+      - |
+        {
+          echo "===== validator.py output (start: $(date -u '+%Y-%m-%dT%H:%M:%SZ')) ====="
+          if ! python3 ../validator.py; then
+            echo "errorMessage=validator.py failed in pre_build phase" > "${ERROR_MESSAGE_FILE:-/tmp/build-logs/error-message.txt}"
+            echo "ERROR: validator.py failed in pre_build phase"
+            exit 1
+          fi
+          echo "===== validator.py output (end: $(date -u '+%Y-%m-%dT%H:%M:%SZ')) ====="
+          echo
+        } >> "${COMBINED_LOG:-/tmp/build-logs/build-execution.log}" 2>&1
 
   build:
     commands:
@@ -32,23 +50,72 @@ phases:
       - echo "Logging in to Docker Hub..."
       - echo "$DOCKER_TOKEN" | docker login --username "$DOCKER_USER" --password-stdin
       # Use -d to run in background, --build to ensure fresh images
-      - docker-compose up -d
+      - |
+        {
+          echo "===== docker-compose up -d output (start: $(date -u '+%Y-%m-%dT%H:%M:%SZ')) ====="
+          if ! docker-compose up -d; then
+            echo "errorMessage=docker-compose up failed in build phase" > "${ERROR_MESSAGE_FILE:-/tmp/build-logs/error-message.txt}"
+            echo "ERROR: docker-compose up failed in build phase"
+            exit 1
+          fi
+          echo "===== docker-compose up -d output (end: $(date -u '+%Y-%m-%dT%H:%M:%SZ')) ====="
+          echo
+        } >> "${COMBINED_LOG:-/tmp/build-logs/build-execution.log}" 2>&1
 
       - echo "Executing test suite..."
       # Check which script exists and run it
       - |
         if [ -f "run_tests.sh" ]; then
-          chmod +x run_tests.sh && ./run_tests.sh
+          chmod +x run_tests.sh
+          if ! ./run_tests.sh; then
+            echo "errorMessage=run_tests.sh failed in build phase" > "${ERROR_MESSAGE_FILE:-/tmp/build-logs/error-message.txt}"
+            exit 1
+          fi
         elif [ -f "run_test.sh" ]; then
-          chmod +x run_test.sh && ./run_test.sh
+          chmod +x run_test.sh
+          if ! ./run_test.sh; then
+            echo "errorMessage=run_test.sh failed in build phase" > "${ERROR_MESSAGE_FILE:-/tmp/build-logs/error-message.txt}"
+            exit 1
+          fi
         else
+          echo "errorMessage=test script not found in build phase" > "${ERROR_MESSAGE_FILE:-/tmp/build-logs/error-message.txt}"
           echo "Test script not found despite validation!" && exit 1
         fi
 
   post_build:
     commands:
       - echo "Build process completed on `date`"
-      - docker-compose down
+      - cd project_bundle/repo || true
+      - |
+        {
+          echo "===== docker-compose service logs snapshot (start: $(date -u '+%Y-%m-%dT%H:%M:%SZ')) ====="
+          docker-compose logs --no-color
+          echo "===== docker-compose service logs snapshot (end: $(date -u '+%Y-%m-%dT%H:%M:%SZ')) ====="
+          echo
+        } >> "${COMBINED_LOG:-/tmp/build-logs/build-execution.log}" 2>&1 || true
+      - docker-compose down || true
+      - |
+        set -e
+
+        upload_s3() {
+          local src=$1
+          local dest_key=$2
+          if [ -n "${REPORT_BUCKET:-}" ] && [ -f "$src" ] && command -v aws >/dev/null 2>&1; then
+            echo "Uploading $src to s3 bucket"
+            aws s3 cp "$src" "s3://${REPORT_BUCKET}/$dest_key" || echo "WARNING: Upload failed for $src"
+          fi
+        }
+
+        KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
+        if [ -f "${ERROR_MESSAGE_FILE:-/tmp/build-logs/error-message.txt}" ]; then
+          {
+            echo "===== error message ====="
+            cat "${ERROR_MESSAGE_FILE:-/tmp/build-logs/error-message.txt}"
+            echo
+          } >> "${COMBINED_LOG:-/tmp/build-logs/build-execution.log}" 2>&1
+        fi
+        upload_s3 "${COMBINED_LOG:-/tmp/build-logs/build-execution.log}" "${KEY_PREFIX:+$KEY_PREFIX/}build-execution.log"
+        upload_s3 "${ERROR_MESSAGE_FILE:-/tmp/build-logs/error-message.txt}" "${KEY_PREFIX:+$KEY_PREFIX/}error-message.txt"
       - echo "Findings recorded."
 
 artifacts:
