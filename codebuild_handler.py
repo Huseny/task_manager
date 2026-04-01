@@ -52,8 +52,8 @@ def monitor_build(build_id):
 
 if __name__ == "__main__":
     # CONFIGURATION
-    PROJECT_NAME = "TaskValidator"
-    TEST_URL = "https://drive.google.com/open?id=1zq4CH4sUgTL2OBxkbWHaVTyjPOeO2nfc"
+    PROJECT_NAME = "MindflowTaskExecutor"
+    TEST_URL = "https://github.com/ep-eaglepoint-ai/w1-task-61"
 
     bid = start_codebuild_task(PROJECT_NAME, TEST_URL)
     monitor_build(bid)
