@@ -21,6 +21,8 @@ phases:
 
   build:
     commands:
+      - echo "Navigating to the repo/ project directory..."
+      - cd repo || exit 1
       - echo "Validation passed. Starting Docker services..."
       # Use -d to run in background, --build to ensure fresh images
       - docker-compose up -d

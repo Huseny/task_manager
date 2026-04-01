@@ -268,12 +268,12 @@ class CodeBuildSetup:
 def main():
     setup = CodeBuildSetup(
         aws_region="us-east-1",
-        project_name="TaskValidator",
+        project_name="MindflowTaskExecutor",
         role_name="CodeBuildExecutionRole",
         image="aws/codebuild/standard:7.0",
         compute_type="BUILD_GENERAL1_SMALL",
         privileged_mode=True,
-        log_group="/codebuild/TaskValidator",
+        log_group="/codebuild/MindflowTaskExecutor",
     )
     result = setup.setup()
     logger.info("Setup result: %s", result)

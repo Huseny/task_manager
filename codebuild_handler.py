@@ -3,7 +3,7 @@ import time
 import sys
 
 
-def start_codebuild_task(project_name, gdrive_url):
+def start_codebuild_task(project_name, repo_url):
     # Initialize the CodeBuild client
     # Ensure your AWS CLI is configured or env vars are set
     cb = boto3.client("codebuild")
@@ -15,7 +15,7 @@ def start_codebuild_task(project_name, gdrive_url):
         response = cb.start_build(
             projectName=project_name,
             environmentVariablesOverride=[
-                {"name": "GDRIVE_URL", "value": gdrive_url, "type": "PLAINTEXT"},
+                {"name": "repo_url", "value": repo_url, "type": "PLAINTEXT"},
             ],
         )
 
