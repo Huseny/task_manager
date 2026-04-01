@@ -2,13 +2,13 @@ version: 0.2
 
 env:
   variables:
-    REPORT_BUCKET: "mindflow_tasks_log"
+    REPORT_BUCKET: "mindflow-tasks-log"
     CLONE_DIR: "project_bundle"
     TARGET_DIR: "project_bundle/repo"
+    COMBINED_LOG: "/tmp/build-execution.log"
   secrets-manager:
     DOCKER_USER: "dockerhub/creds:username"
     DOCKER_TOKEN: "dockerhub/creds:password"
-    # GITHUB_PAT: "github/pat:token" # Uncomment if using private repos
 
 phases:
   install:
@@ -16,20 +16,17 @@ phases:
       python: 3.12
     commands:
       - echo "=== INSTALL PHASE ==="
+      - touch "$COMBINED_LOG"
       - |
         set +e
         fail_and_upload() {
           reason="$1"
-          echo "$reason" | tee /tmp/build_fail_reason.log
+          echo "\n[FAILURE] $reason" >> "$COMBINED_LOG"
           if [ -n "${REPORT_BUCKET:-}" ] && command -v aws >/dev/null 2>&1; then
             KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
             JOB_ID_VAL="${JOB_ID:-${CODEBUILD_BUILD_ID}}"
-            BASE_KEY="${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}"
-            echo "$reason" > /tmp/build_error.log
-            for f in /tmp/*.log /tmp/*.txt; do
-              [ -f "$f" ] || continue
-              aws s3 cp "$f" "s3://${REPORT_BUCKET}/${BASE_KEY}/logs/$(basename "$f")" >/dev/null 2>&1 || true
-            done
+            # Upload the combined log immediately on failure
+            aws s3 cp "$COMBINED_LOG" "s3://${REPORT_BUCKET}/${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}/build-execution.log" || true
           fi
           exit 1
         }
@@ -42,43 +39,29 @@ phases:
     commands:
       - |
         set +e
+        # Redefine helper for the current phase scope
         fail_and_upload() {
           reason="$1"
-          echo "$reason" | tee /tmp/build_fail_reason.log
-          if [ -n "${REPORT_BUCKET:-}" ] && command -v aws >/dev/null 2>&1; then
+          echo "\n[FAILURE] $reason" >> "$COMBINED_LOG"
+          if [ -n "${REPORT_BUCKET:-}" ]; then
             KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
             JOB_ID_VAL="${JOB_ID:-${CODEBUILD_BUILD_ID}}"
-            BASE_KEY="${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}"
-            echo "$reason" > /tmp/build_error.log
-            for f in /tmp/*.log /tmp/*.txt; do
-              [ -f "$f" ] || continue
-              aws s3 cp "$f" "s3://${REPORT_BUCKET}/${BASE_KEY}/logs/$(basename "$f")" >/dev/null 2>&1 || true
-            done
+            aws s3 cp "$COMBINED_LOG" "s3://${REPORT_BUCKET}/${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}/build-execution.log" || true
           fi
           exit 1
         }
 
-        echo "Cloning project..."
-        if [ -z "${repo_url:-}" ]; then fail_and_upload "ERROR: repo_url is not set"; fi
-
-        # Handle Git Authentication if PAT is provided
-        if [ -n "${GITHUB_PAT:-}" ]; then
-          git config --global url."https://${GITHUB_PAT}@github.com/".insteadOf "https://github.com/"
+        echo "==================== GIT CLONE ====================" >> "$COMBINED_LOG"
+        if ! git clone "${repo_url}" "$CLONE_DIR" >> "$COMBINED_LOG" 2>&1; then
+          fail_and_upload "git clone failed"
         fi
 
-        if ! git clone "${repo_url}" "$CLONE_DIR" 2>&1 | tee /tmp/git_clone.log; then
-          fail_and_upload "ERROR: git clone failed"
+        echo "\n==================== VALIDATOR OUTPUT ====================" >> "$COMBINED_LOG"
+        if ! python3 validator.py >> "$COMBINED_LOG" 2>&1; then
+          fail_and_upload "validator.py failed"
         fi
 
-        echo "Running validator.py..."
-        # validator.py is in the parent of the project_bundle according to your previous logic
-        if ! python3 validator.py 2>&1 | tee /tmp/validator.log; then
-          fail_and_upload "ERROR: validator.py failed"
-        fi
-
-        # Persist directory for the next phase
         echo "$(pwd)/$TARGET_DIR" > /tmp/build_dir
-        true
 
   build:
     commands:
@@ -86,82 +69,56 @@ phases:
         set +e
         fail_and_upload() {
           reason="$1"
-          echo "$reason" | tee /tmp/build_fail_reason.log
-          if [ -n "${REPORT_BUCKET:-}" ] && command -v aws >/dev/null 2>&1; then
+          echo "\n[FAILURE] $reason" >> "$COMBINED_LOG"
+          if [ -n "${REPORT_BUCKET:-}" ]; then
             KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
             JOB_ID_VAL="${JOB_ID:-${CODEBUILD_BUILD_ID}}"
-            BASE_KEY="${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}"
-            echo "$reason" > /tmp/build_error.log
-            for f in /tmp/*.log /tmp/*.txt; do
-              [ -f "$f" ] || continue
-              aws s3 cp "$f" "s3://${REPORT_BUCKET}/${BASE_KEY}/logs/$(basename "$f")" >/dev/null 2>&1 || true
-            done
+            aws s3 cp "$COMBINED_LOG" "s3://${REPORT_BUCKET}/${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}/build-execution.log" || true
           fi
           exit 1
         }
 
         if [ -f /tmp/build_dir ]; then cd "$(cat /tmp/build_dir)"; else fail_and_upload "Target directory not found"; fi
 
-        echo "Logging in to Docker Hub..."
-        echo "$DOCKER_TOKEN" | docker login --username "$DOCKER_USER" --password-stdin
+        echo "\n==================== DOCKER SETUP ====================" >> "$COMBINED_LOG"
+        echo "$DOCKER_TOKEN" | docker login --username "$DOCKER_USER" --password-stdin >> "$COMBINED_LOG" 2>&1
 
-        echo "Starting Docker services..."
-        if ! docker-compose up -d 2>&1 | tee /tmp/docker_compose.log; then
-          fail_and_upload "ERROR: docker-compose up failed"
+        if ! docker-compose up -d >> "$COMBINED_LOG" 2>&1; then
+          fail_and_upload "docker-compose up failed"
         fi
 
-        echo "Executing tests..."
+        echo "\n==================== TEST SUITE ====================" >> "$COMBINED_LOG"
         TEST_SCRIPT=""
         [ -f "run_tests.sh" ] && TEST_SCRIPT="run_tests.sh"
         [ -f "run_test.sh" ] && [ -z "$TEST_SCRIPT" ] && TEST_SCRIPT="run_test.sh"
 
         if [ -n "$TEST_SCRIPT" ]; then
           chmod +x "$TEST_SCRIPT"
-          if ! ./"$TEST_SCRIPT" 2>&1 | tee /tmp/tests.log; then
-            fail_and_upload "ERROR: $TEST_SCRIPT failed"
+          if ! ./"$TEST_SCRIPT" >> "$COMBINED_LOG" 2>&1; then
+            fail_and_upload "$TEST_SCRIPT failed"
           fi
         else
-          fail_and_upload "ERROR: No test script found (run_tests.sh or run_test.sh)"
+          fail_and_upload "No test script found"
         fi
 
   post_build:
     commands:
       - |
         set -e
-        echo "=== POST-BUILD PHASE ==="
+        echo "\n==================== POST-BUILD CLEANUP ====================" >> "$COMBINED_LOG"
         if [ -f /tmp/build_dir ]; then cd "$(cat /tmp/build_dir)"; fi
 
-        # Capture Docker logs before shutting down
         if command -v docker-compose >/dev/null 2>&1; then
-          docker-compose logs --no-color > /tmp/docker_runtime.log 2>&1 || true
-          docker-compose down || true
+          echo "\n--- Docker Service Logs ---" >> "$COMBINED_LOG"
+          docker-compose logs --no-color >> "$COMBINED_LOG" 2>&1 || true
+          docker-compose down >> "$COMBINED_LOG" 2>&1 || true
         fi
 
+        echo "\nBuild process finished at $(date)" >> "$COMBINED_LOG"
+
+        # Final S3 Upload
         KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
         JOB_ID_VAL="${JOB_ID:-${CODEBUILD_BUILD_ID}}"
-        BASE_KEY="${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}"
-
-        upload_s3() {
-          if [ -n "${REPORT_BUCKET:-}" ] && [ -f "$1" ]; then
-            aws s3 cp "$1" "s3://${REPORT_BUCKET}/${BASE_KEY}/$(basename "$1")"
-          fi
-        }
-
-        # Upload all gathered logs
-        for f in /tmp/*.log /tmp/*.txt; do
-          [ -f "$f" ] || continue
-          aws s3 cp "$f" "s3://${REPORT_BUCKET}/${BASE_KEY}/logs/$(basename "$f")"
-        done
-
-        # Look for any JSON reports generated by your tests
-        REPORT_FILE=$(find . -maxdepth 2 -name "report.json" -print | head -n 1)
-        if [ -n "$REPORT_FILE" ]; then
-          upload_s3 "$REPORT_FILE"
+        if [ -n "${REPORT_BUCKET:-}" ]; then
+           aws s3 cp "$COMBINED_LOG" "s3://${REPORT_BUCKET}/${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}/build-execution.log"
         fi
-
-        echo "=== POST-BUILD COMPLETE ==="
-
-artifacts:
-  files:
-    - "**/*"
-  name: validated-project-$(date +%Y-%m-%d)
