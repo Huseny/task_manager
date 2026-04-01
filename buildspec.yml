@@ -22,7 +22,7 @@ phases:
       - echo "Navigating to project and validating structure..."
       # This handles your requirement of being at the parent level or root
       - cd extracted_project
-      - python3 ../validator.py
+      - python3 ../../validator.py
 
   build:
     commands:
