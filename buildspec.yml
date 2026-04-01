@@ -13,7 +13,7 @@ phases:
       python: 3.x
     commands:
       - echo "Ensuring docker and docker-compose are available..."
-      -  # Ensure docker-compose is available (usually pre-installed in Standard images)
+      # Ensure docker-compose is available (usually pre-installed in Standard images)
       - docker-compose version
 
   pre_build:
