@@ -24,7 +24,7 @@ phases:
       - export COMBINED_LOG="$LOG_DIR/build-execution.log"
       - export ERROR_MESSAGE_FILE="$LOG_DIR/error-message.txt"
       - mkdir -p "$LOG_DIR"
-      - : > "$COMBINED_LOG"
+      - ': > "$COMBINED_LOG"'
       - echo "errorMessage=none" > "$ERROR_MESSAGE_FILE"
 
       - echo "Navigating to project and validating structure..."
