@@ -2,7 +2,7 @@ version: 0.2
 
 env:
   variables:
-    REPORT_BUCKET: "mindflow_tasks_log"
+    REPORT_BUCKET: "mindflow-tasks-log"
     LOG_DIR: "/tmp/build-logs"
     COMBINED_LOG: "/tmp/build-logs/build-execution.log"
     ERROR_MESSAGE_FILE: "/tmp/build-logs/error-message.txt"
