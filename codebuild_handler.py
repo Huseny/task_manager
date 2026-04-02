@@ -53,7 +53,7 @@ def monitor_build(build_id):
 if __name__ == "__main__":
     # CONFIGURATION
     PROJECT_NAME = "MindflowTaskExecutor"
-    TEST_URL = "https://github.com/ep-eaglepoint-ai/w1-task-61"
+    TEST_URL = "https://github.com/yohannesakd/hearthstone"
 
     bid = start_codebuild_task(PROJECT_NAME, TEST_URL)
     monitor_build(bid)

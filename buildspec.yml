@@ -25,7 +25,6 @@ phases:
           if [ -n "${REPORT_BUCKET:-}" ] && command -v aws >/dev/null 2>&1; then
             KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
             JOB_ID_VAL="${JOB_ID:-${CODEBUILD_BUILD_ID}}"
-            # Upload the combined log immediately on failure
             aws s3 cp "$COMBINED_LOG" "s3://${REPORT_BUCKET}/${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}/build-execution.log" || true
           fi
           exit 1
@@ -39,7 +38,6 @@ phases:
     commands:
       - |
         set +e
-        # Redefine helper for the current phase scope
         fail_and_upload() {
           reason="$1"
           echo "\n[FAILURE] $reason" >> "$COMBINED_LOG"
@@ -59,6 +57,11 @@ phases:
         echo "\n==================== VALIDATOR OUTPUT ====================" >> "$COMBINED_LOG"
         if ! python3 validator.py >> "$COMBINED_LOG" 2>&1; then
           fail_and_upload "validator.py failed"
+        fi
+
+        echo "\n==================== TRAJECTORY VALIDATION ====================" >> "$COMBINED_LOG"
+        if ! python3 trajectory_validator.py "$CLONE_DIR/sessions" --batch >> "$COMBINED_LOG" 2>&1; then
+          fail_and_upload "Trajectory validation failed (High Risk detected)"
         fi
 
         echo "$(pwd)/$TARGET_DIR" > /tmp/build_dir
@@ -116,7 +119,6 @@ phases:
 
         echo "\nBuild process finished at $(date)" >> "$COMBINED_LOG"
 
-        # Final S3 Upload
         KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
         JOB_ID_VAL="${JOB_ID:-${CODEBUILD_BUILD_ID}}"
         if [ -n "${REPORT_BUCKET:-}" ]; then

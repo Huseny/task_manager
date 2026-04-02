@@ -51,6 +51,7 @@ def validate_structure():
         "docs/questions.md",
         "metadata.json",
         "repo/docker-compose.yml",
+        "repo/README.md",
     ]
 
     errors = []
