@@ -6,17 +6,18 @@ Usage: python trajectory_validator.py trajectory.json
        python trajectory_validator.py --batch ./submissions/
 """
 
+import re
 import json, sys, os, argparse
-from datetime import datetime, timezone
+from datetime import datetime
 from collections import Counter
 from pathlib import Path
 
-RED   = "\033[91m"
-YEL   = "\033[93m"
-GRN   = "\033[92m"
-DIM   = "\033[2m"
-BOLD  = "\033[1m"
-RST   = "\033[0m"
+RED = "\033[91m"
+YEL = "\033[93m"
+GRN = "\033[92m"
+DIM = "\033[2m"
+BOLD = "\033[1m"
+RST = "\033[0m"
 
 WEIGHTS = {"fail": 25, "warn": 8, "pass": 0}
 
@@ -29,12 +30,17 @@ def load_json(path):
 def check_structure(data):
     has_msg = isinstance(data.get("messages"), list)
     has_meta = isinstance(data.get("meta"), dict) and "session_meta" in data["meta"]
-    has_ctx  = isinstance(data.get("meta", {}).get("turn_contexts"), list)
+    has_ctx = isinstance(data.get("meta", {}).get("turn_contexts"), list)
     if has_msg and has_meta:
-        return "pass", f"Valid structure. messages[{len(data['messages'])}], meta present, turn_contexts={'yes' if has_ctx else 'missing'}"
+        return (
+            "pass",
+            f"Valid structure. messages[{len(data['messages'])}], meta present, turn_contexts={'yes' if has_ctx else 'missing'}",
+        )
     missing = []
-    if not has_msg:  missing.append("messages[]")
-    if not has_meta: missing.append("meta.session_meta")
+    if not has_msg:
+        missing.append("messages[]")
+    if not has_meta:
+        missing.append("meta.session_meta")
     return "fail", f"Missing required fields: {', '.join(missing)}"
 
 
@@ -53,13 +59,15 @@ def check_timestamps(data):
     for c in ctxs:
         ts = c.get("_timestamp")
         if ts:
-            try: times.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
-            except: pass
+            try:
+                times.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+            except:
+                pass
     if len(times) < 2:
         return "warn", "Insufficient parseable timestamps"
     flags = []
     for i in range(1, len(times)):
-        delta = (times[i] - times[i-1]).total_seconds()
+        delta = (times[i] - times[i - 1]).total_seconds()
         if delta < 0:
             flags.append(f"Turn {i}: BACKWARD by {abs(int(delta))}s")
         elif delta > 14400:
@@ -78,8 +86,14 @@ def check_models(data):
     if len(models) == 1:
         return "pass", f"Consistent model: {models[0]}"
     if len(models) == 2:
-        return "warn", f"2 models detected: {', '.join(models)} — acceptable if intentional"
-    return "fail", f"{len(models)} models: {', '.join(models)} — strong indicator of session splice"
+        return (
+            "warn",
+            f"2 models detected: {', '.join(models)} — acceptable if intentional",
+        )
+    return (
+        "fail",
+        f"{len(models)} models: {', '.join(models)} — strong indicator of session splice",
+    )
 
 
 def check_cwd(data):
@@ -89,14 +103,16 @@ def check_cwd(data):
         return "warn", "No working directory info found"
     if len(cwds) == 1:
         return "pass", f"Consistent cwd: {cwds[0]}"
-    return "fail" if len(cwds) > 2 else "warn", f"{len(cwds)} different dirs detected: {' -> '.join(cwds)}"
+    return (
+        "fail" if len(cwds) > 2 else "warn"
+    ), f"{len(cwds)} different dirs detected: {' -> '.join(cwds)}"
 
 
 def check_role_sequence(data):
     msgs = data.get("messages", [])
     flags = []
     for i in range(1, len(msgs)):
-        p, c = msgs[i-1].get("role"), msgs[i].get("role")
+        p, c = msgs[i - 1].get("role"), msgs[i].get("role")
         if p == c and c != "tool":
             flags.append(f"Consecutive '{c}' at index {i}")
     if not flags:
@@ -110,16 +126,25 @@ def check_tool_ids(data):
         for tc in m.get("tool_calls", []):
             tid = tc.get("id")
             if tid:
-                if tid in seen: dupes.append(tid)
-                else: seen.add(tid)
+                if tid in seen:
+                    dupes.append(tid)
+                else:
+                    seen.add(tid)
     if not dupes:
         return "pass", f"All {len(seen)} tool call IDs are unique"
-    return "fail", f"{len(dupes)} duplicate tool_call_id(s): {', '.join(dupes[:3])} — strong merge indicator"
+    return (
+        "fail",
+        f"{len(dupes)} duplicate tool_call_id(s): {', '.join(dupes[:3])} — strong merge indicator",
+    )
 
 
 def check_approval_policy(data):
     ctxs = data.get("meta", {}).get("turn_contexts", [])
-    policies = list(dict.fromkeys(c.get("approval_policy") for c in ctxs if c.get("approval_policy")))
+    policies = list(
+        dict.fromkeys(
+            c.get("approval_policy") for c in ctxs if c.get("approval_policy")
+        )
+    )
     if not policies:
         return "warn", "No approval policy found"
     if len(policies) == 1:
@@ -130,10 +155,13 @@ def check_approval_policy(data):
 def check_originator(data):
     sm = data.get("meta", {}).get("session_meta", {})
     orig = sm.get("originator")
-    src  = sm.get("source")
-    cli  = sm.get("cli_version")
+    src = sm.get("source")
+    cli = sm.get("cli_version")
     if orig:
-        return "pass", f"Originator: {orig} | source: {src or 'N/A'} | cli_version: {cli or 'N/A'}"
+        return (
+            "pass",
+            f"Originator: {orig} | source: {src or 'N/A'} | cli_version: {cli or 'N/A'}",
+        )
     return "warn", "No originator info — metadata may have been stripped"
 
 
@@ -148,16 +176,25 @@ def check_content_density(data):
     avg = sum(lengths) / len(lengths)
     spikes = [l for l in lengths if l > avg * 5]
     if spikes:
-        return "warn", f"{len(spikes)} message(s) are 5x above avg ({int(avg)} chars) — check for pasted content"
-    return "pass", f"{len(lengths)} messages, avg {int(avg)} chars/message — no anomalies"
+        return (
+            "warn",
+            f"{len(spikes)} message(s) are 5x above avg ({int(avg)} chars) — check for pasted content",
+        )
+    return (
+        "pass",
+        f"{len(lengths)} messages, avg {int(avg)} chars/message — no anomalies",
+    )
 
 
 def check_collab_mode(data):
     ctxs = data.get("meta", {}).get("turn_contexts", [])
-    modes = list(dict.fromkeys(
-        c.get("collaboration_mode", {}).get("mode") for c in ctxs
-        if c.get("collaboration_mode", {}).get("mode")
-    ))
+    modes = list(
+        dict.fromkeys(
+            c.get("collaboration_mode", {}).get("mode")
+            for c in ctxs
+            if c.get("collaboration_mode", {}).get("mode")
+        )
+    )
     if not modes:
         return "warn", "No collaboration mode found"
     if len(modes) == 1:
@@ -166,12 +203,14 @@ def check_collab_mode(data):
 
 
 def check_hardcoded(data):
-    import re
     patterns = [
         (r'return\s+["\'].*[Ss]uccess["\']', "hardcoded success return"),
         (r'console\.log\(["\'][0-9]+["\']\)', "numeric debug log"),
         (r'password\s*=\s*["\'][^"\']+["\']', "plaintext password"),
-        (r'(SELECT|INSERT|UPDATE|DELETE).*\+\s*(user|input|query)', "SQL concatenation"),
+        (
+            r"(SELECT|INSERT|UPDATE|DELETE).*\+\s*(user|input|query)",
+            "SQL concatenation",
+        ),
     ]
     hits = []
     for m in data.get("messages", []):
@@ -183,22 +222,25 @@ def check_hardcoded(data):
     if not hits:
         return "pass", "No hardcoded or insecure patterns detected"
     counts = Counter(hits)
-    return "warn", f"{len(hits)} pattern(s): {', '.join(f'{v}x {k}' for k,v in counts.items())}"
+    return (
+        "warn",
+        f"{len(hits)} pattern(s): {', '.join(f'{v}x {k}' for k,v in counts.items())}",
+    )
 
 
 CHECKS = [
-    ("Structure integrity",          check_structure),
-    ("Session ID uniqueness",        check_session_id),
-    ("Timestamp continuity",         check_timestamps),
-    ("Model consistency",            check_models),
-    ("Working directory (cwd)",      check_cwd),
-    ("Message role sequence",        check_role_sequence),
-    ("Tool call ID integrity",       check_tool_ids),
-    ("Approval policy consistency",  check_approval_policy),
-    ("Originator & source",          check_originator),
-    ("Content density analysis",     check_content_density),
-    ("Collaboration mode",           check_collab_mode),
-    ("Hardcoded content detection",  check_hardcoded),
+    ("Structure integrity", check_structure),
+    ("Session ID uniqueness", check_session_id),
+    ("Timestamp continuity", check_timestamps),
+    ("Model consistency", check_models),
+    ("Working directory (cwd)", check_cwd),
+    ("Message role sequence", check_role_sequence),
+    ("Tool call ID integrity", check_tool_ids),
+    ("Approval policy consistency", check_approval_policy),
+    ("Originator & source", check_originator),
+    ("Content density analysis", check_content_density),
+    ("Collaboration mode", check_collab_mode),
+    ("Hardcoded content detection", check_hardcoded),
 ]
 
 
@@ -235,7 +277,9 @@ def print_report(path, results, risk_score):
     elif risk_score < 30:
         verdict = f"{YEL}{BOLD}LOW-MEDIUM RISK{RST} ({risk_score}/100) — Review flagged checks"
     elif risk_score < 60:
-        verdict = f"{YEL}{BOLD}MEDIUM RISK{RST} ({risk_score}/100) — Likely manipulation"
+        verdict = (
+            f"{YEL}{BOLD}MEDIUM RISK{RST} ({risk_score}/100) — Likely manipulation"
+        )
     else:
         verdict = f"{RED}{BOLD}HIGH RISK{RST} ({risk_score}/100) — Reject submission"
     print(f"Risk score : {risk_score}/100")
@@ -257,28 +301,67 @@ def validate_file(path):
 
 
 def batch_validate(folder):
+
     folder = Path(folder)
-    files = list(folder.rglob("trajectory*.json")) + list(folder.rglob("session*.json"))
-    if not files:
-        print(f"No trajectory/session JSON files found in {folder}")
-        return
+    if not folder.is_dir():
+        print(f"{RED}ERROR{RST}: {folder} is not a directory")
+        raise SystemExit(1)
+
+    all_files = [p for p in folder.rglob("*") if p.is_file()]
+
+    # 1) Fail immediately if any non-JSON file exists
+    non_json_files = [p for p in all_files if p.suffix.lower() != ".json"]
+    if non_json_files:
+        print(f"{RED}ERROR{RST}: Non-JSON file(s) found. Batch rejected.")
+        for p in non_json_files[: min(10, len(non_json_files))]:
+            print(f"  - {p}")
+        if len(non_json_files) > 10:
+            print(f"  ... and {len(non_json_files) - 10} more")
+        raise SystemExit(1)
+
+    json_files = sorted(all_files)
+    if not json_files:
+        print(f"{RED}ERROR{RST}: No JSON files found in {folder}")
+        raise SystemExit(1)
+
+    # 2) Fail immediately if any filename is not develop-N.json or bugfix-N.json
+    name_pattern = re.compile(r"^(develop|bugfix)-\d+\.json$")
+    bad_names = [p for p in json_files if not name_pattern.match(p.name)]
+    if bad_names:
+        print(f"{RED}ERROR{RST}: Invalid filename(s). Batch rejected.")
+        print("Expected pattern: develop-N.json or bugfix-N.json")
+        for p in bad_names[: min(10, len(bad_names))]:
+            print(f"  - {p.name}")
+        if len(bad_names) > 10:
+            print(f"  ... and {len(bad_names) - 10} more")
+        raise SystemExit(1)
+
+    # 3) Content checks
     summary = []
-    for f in files:
+    for f in json_files:
         risk = validate_file(str(f))
         summary.append((str(f), risk))
+
     print(f"\n{BOLD}Batch Summary ({len(summary)} files){RST}")
     print("-" * 50)
     for path, risk in sorted(summary, key=lambda x: -x[1]):
         col = GRN if risk == 0 else YEL if risk < 40 else RED
         print(f"  {col}{risk:3d}/100{RST}  {path}")
+
     high_risk = sum(1 for _, r in summary if r >= 60)
     print(f"\nHigh-risk submissions: {high_risk}/{len(summary)}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Session trajectory validator for QA teams")
-    parser.add_argument("target", help="Path to trajectory.json or folder for batch mode")
-    parser.add_argument("--batch", action="store_true", help="Scan entire folder recursively")
+    parser = argparse.ArgumentParser(
+        description="Session trajectory validator for QA teams"
+    )
+    parser.add_argument(
+        "target", help="Path to trajectory.json or folder for batch mode"
+    )
+    parser.add_argument(
+        "--batch", action="store_true", help="Scan entire folder recursively"
+    )
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
     args = parser.parse_args()
 
@@ -289,7 +372,12 @@ def main():
         results = run_checks(data)
         risk = score(results)
         if args.json:
-            print(json.dumps({"file": args.target, "risk_score": risk, "checks": results}, indent=2))
+            print(
+                json.dumps(
+                    {"file": args.target, "risk_score": risk, "checks": results},
+                    indent=2,
+                )
+            )
         else:
             print_report(args.target, results, risk)
         sys.exit(1 if risk >= 60 else 0)
