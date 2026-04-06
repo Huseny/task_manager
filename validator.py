@@ -27,6 +27,43 @@ def get_validation_root():
     return None
 
 
+def is_temp_entry(path: Path) -> bool:
+    """Return True for common temporary files/folders."""
+    name = path.name
+    lower_name = name.lower()
+
+    temp_exact_names = {
+        "tmp",
+        "temp",
+        "temporary",
+        ".tmp",
+        ".temp",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".cache",
+    }
+    temp_suffixes = {".tmp", ".temp", ".swp", ".swo", ".bak", ".old", ".orig", ".rej"}
+
+    if lower_name in temp_exact_names:
+        return True
+
+    if lower_name.endswith("~") or lower_name.startswith("~$"):
+        return True
+
+    if any(lower_name.endswith(suffix) for suffix in temp_suffixes):
+        return True
+
+    if lower_name.startswith("tmp-") or lower_name.startswith("temp-"):
+        return True
+
+    if lower_name.endswith("-tmp") or lower_name.endswith("-temp"):
+        return True
+
+    return False
+
+
 def validate_structure():
     root = get_validation_root()
 
@@ -72,7 +109,28 @@ def validate_structure():
             errors.append(f"Missing file: {f}")
             print(f"{Colors.FAIL} [✗] Missing file: {f}{Colors.ENDC}")
 
-    # 3. Validate Session Files (Strict check for develop-N.json)
+    # 3. Validate strict root entries
+    allowed_root_entries = {"docs", "repo", "sessions", "metadata.json"}
+    for entry in root.iterdir():
+        if entry.name not in allowed_root_entries:
+            entry_type = "directory" if entry.is_dir() else "file"
+            errors.append(f"Unexpected {entry_type} in root: {entry.name}")
+            print(
+                f"{Colors.FAIL} [✗] Unexpected {entry_type} in root: {entry.name}{Colors.ENDC}"
+            )
+
+    # 4. Validate docs contains only markdown files
+    docs_dir = root / "docs"
+    if docs_dir.is_dir():
+        for entry in docs_dir.iterdir():
+            if entry.is_dir() or entry.suffix.lower() != ".md":
+                entry_type = "directory" if entry.is_dir() else "file"
+                errors.append(f"Invalid {entry_type} in docs/: {entry.name}")
+                print(
+                    f"{Colors.FAIL} [✗] Invalid {entry_type} in docs/: {entry.name}{Colors.ENDC}"
+                )
+
+    # 5. Validate Session Files (Strict check for develop-N.json)
     sessions_dir = root / "sessions"
     if sessions_dir.is_dir():
         session_files = list(sessions_dir.glob("develop-*.json"))
@@ -84,7 +142,7 @@ def validate_structure():
             errors.append("Missing session trace (sessions/develop-N.json)")
             print(f"{Colors.FAIL} [✗] Missing session trace in sessions/{Colors.ENDC}")
 
-    # 4. Validate Test Script (Strict check for run_test.sh OR run_tests.sh)
+    # 6. Validate Test Script (Strict check for run_test.sh OR run_tests.sh)
     test_options = ["repo/run_test.sh", "repo/run_tests.sh"]
     found_test = next((opt for opt in test_options if (root / opt).is_file()), None)
 
@@ -93,6 +151,16 @@ def validate_structure():
     else:
         errors.append("Missing test script (run_test.sh or run_tests.sh)")
         print(f"{Colors.FAIL} [✗] Missing test script{Colors.ENDC}")
+
+    # 7. Validate no temporary files/folders anywhere in project
+    for entry in root.rglob("*"):
+        if is_temp_entry(entry):
+            entry_type = "directory" if entry.is_dir() else "file"
+            relative_path = entry.relative_to(root)
+            errors.append(f"Temporary {entry_type} found: {relative_path}")
+            print(
+                f"{Colors.FAIL} [✗] Temporary {entry_type} found: {relative_path}{Colors.ENDC}"
+            )
 
     # Final Results
     print("\n" + "─" * 45)
