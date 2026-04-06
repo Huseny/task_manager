@@ -30,6 +30,27 @@ phases:
           exit 1
         }
 
+        echo "==================== DOCKER INSTALL/UPGRADE ====================" >> "$COMBINED_LOG"
+        if command -v apt-get >/dev/null 2>&1; then
+          apt-get update >> "$COMBINED_LOG" 2>&1 || fail_and_upload "apt-get update failed"
+          apt-get install -y ca-certificates curl gnupg >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Failed to install Docker prerequisites"
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc || fail_and_upload "Failed to fetch Docker GPG key"
+          chmod a+r /etc/apt/keyrings/docker.asc
+          . /etc/os-release
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
+          apt-get update >> "$COMBINED_LOG" 2>&1 || fail_and_upload "apt-get update for Docker repo failed"
+          apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Failed to install latest Docker packages"
+        elif command -v yum >/dev/null 2>&1; then
+          yum install -y yum-utils >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Failed to install yum-utils"
+          yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Failed to configure Docker yum repo"
+          yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Failed to install latest Docker packages"
+        else
+          fail_and_upload "Unsupported package manager for Docker installation"
+        fi
+
+        docker --version >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Docker not available after installation"
+
         if ! docker info >/dev/null 2>&1; then
           fail_and_upload "Docker daemon not available — ensure CodeBuild project has privilegedMode=true"
         fi
@@ -86,8 +107,16 @@ phases:
         echo "\n==================== DOCKER SETUP ====================" >> "$COMBINED_LOG"
         echo "$DOCKER_TOKEN" | docker login --username "$DOCKER_USER" --password-stdin >> "$COMBINED_LOG" 2>&1
 
-        if ! docker-compose up -d >> "$COMBINED_LOG" 2>&1; then
-          fail_and_upload "docker-compose up failed"
+        if docker compose version >/dev/null 2>&1; then
+          COMPOSE_CMD="docker compose"
+        elif command -v docker-compose >/dev/null 2>&1; then
+          COMPOSE_CMD="docker-compose"
+        else
+          fail_and_upload "Docker Compose is not installed"
+        fi
+
+        if ! $COMPOSE_CMD up -d >> "$COMBINED_LOG" 2>&1; then
+          fail_and_upload "docker compose up failed"
         fi
 
         echo "\n==================== TEST SUITE ====================" >> "$COMBINED_LOG"
@@ -111,10 +140,18 @@ phases:
         echo "\n==================== POST-BUILD CLEANUP ====================" >> "$COMBINED_LOG"
         if [ -f /tmp/build_dir ]; then cd "$(cat /tmp/build_dir)"; fi
 
-        if command -v docker-compose >/dev/null 2>&1; then
+        if docker compose version >/dev/null 2>&1; then
+          COMPOSE_CMD="docker compose"
+        elif command -v docker-compose >/dev/null 2>&1; then
+          COMPOSE_CMD="docker-compose"
+        else
+          COMPOSE_CMD=""
+        fi
+
+        if [ -n "$COMPOSE_CMD" ]; then
           echo "\n--- Docker Service Logs ---" >> "$COMBINED_LOG"
-          docker-compose logs --no-color >> "$COMBINED_LOG" 2>&1 || true
-          docker-compose down >> "$COMBINED_LOG" 2>&1 || true
+          $COMPOSE_CMD logs --no-color >> "$COMBINED_LOG" 2>&1 || true
+          $COMPOSE_CMD down >> "$COMBINED_LOG" 2>&1 || true
         fi
 
         echo "\nBuild process finished at $(date)" >> "$COMBINED_LOG"
