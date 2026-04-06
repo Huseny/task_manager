@@ -25,35 +25,40 @@ phases:
           if [ -n "${REPORT_BUCKET:-}" ] && command -v aws >/dev/null 2>&1; then
             KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
             JOB_ID_VAL="${JOB_ID:-${CODEBUILD_BUILD_ID}}"
-            aws s3 cp "$COMBINED_LOG" "s3://${REPORT_BUCKET}/${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}/build-execution.log" || true
+            aws s3 cp "$COMBINED_LOG" "s3://${REPORT_BUCKET}/${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}/build-execution.log" >/dev/null 2>&1 || true
           fi
           exit 1
         }
 
-        echo "==================== DOCKER INSTALL/UPGRADE ====================" >> "$COMBINED_LOG"
-        if command -v apt-get >/dev/null 2>&1; then
-          apt-get update >> "$COMBINED_LOG" 2>&1 || fail_and_upload "apt-get update failed"
-          apt-get install -y ca-certificates curl gnupg >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Failed to install Docker prerequisites"
-          install -m 0755 -d /etc/apt/keyrings
-          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc || fail_and_upload "Failed to fetch Docker GPG key"
-          chmod a+r /etc/apt/keyrings/docker.asc
-          . /etc/os-release
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
-          apt-get update >> "$COMBINED_LOG" 2>&1 || fail_and_upload "apt-get update for Docker repo failed"
-          apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Failed to install latest Docker packages"
-        elif command -v yum >/dev/null 2>&1; then
-          yum install -y yum-utils >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Failed to install yum-utils"
-          yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Failed to configure Docker yum repo"
-          yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Failed to install latest Docker packages"
+        install_docker_quietly() {
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update >/dev/null 2>&1 || return 1
+            apt-get install -y ca-certificates curl gnupg >/dev/null 2>&1 || return 1
+            install -m 0755 -d /etc/apt/keyrings || return 1
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc >/dev/null 2>&1 || return 1
+            chmod a+r /etc/apt/keyrings/docker.asc || return 1
+            . /etc/os-release
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list || return 1
+            apt-get update >/dev/null 2>&1 || return 1
+            apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null 2>&1 || return 1
+          elif command -v yum >/dev/null 2>&1; then
+            yum install -y yum-utils >/dev/null 2>&1 || return 1
+            yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >/dev/null 2>&1 || return 1
+            yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null 2>&1 || return 1
+          else
+            return 1
+          fi
+          return 0
+        }
+
+        if install_docker_quietly; then
+          echo "[INFO] Docker install finished" >> "$COMBINED_LOG"
         else
-          fail_and_upload "Unsupported package manager for Docker installation"
+          fail_and_upload "Docker install failed"
         fi
 
-        docker --version >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Docker not available after installation"
-
-        if ! docker info >/dev/null 2>&1; then
-          fail_and_upload "Docker daemon not available — ensure CodeBuild project has privilegedMode=true"
-        fi
+        docker --version >/dev/null 2>&1 || fail_and_upload "Docker not available after installation"
+        docker info >/dev/null 2>&1 || fail_and_upload "Docker daemon not available — ensure CodeBuild project has privilegedMode=true"
 
   pre_build:
     commands:
