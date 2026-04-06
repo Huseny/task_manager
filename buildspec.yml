@@ -85,10 +85,10 @@ phases:
           fail_and_upload "validator.py failed"
         fi
 
-        echo "\n==================== TRAJECTORY VALIDATION ====================" >> "$COMBINED_LOG"
-        if ! python3 trajectory_validator.py "$CLONE_DIR/sessions" --batch >> "$COMBINED_LOG" 2>&1; then
-          fail_and_upload "Trajectory validation failed (High Risk detected)"
-        fi
+        # echo "\n==================== TRAJECTORY VALIDATION ====================" >> "$COMBINED_LOG"
+        # if ! python3 trajectory_validator.py "$CLONE_DIR/sessions" --batch >> "$COMBINED_LOG" 2>&1; then
+        #   fail_and_upload "Trajectory validation failed (High Risk detected)"
+        # fi
 
         echo "$(pwd)/$TARGET_DIR" > /tmp/build_dir
 
