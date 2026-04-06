@@ -110,7 +110,15 @@ def validate_structure():
             print(f"{Colors.FAIL} [✗] Missing file: {f}{Colors.ENDC}")
 
     # 3. Validate strict root entries
-    allowed_root_entries = {"docs", "repo", "sessions", "metadata.json"}
+    allowed_root_entries = {
+        "docs",
+        "repo",
+        "sessions",
+        "metadata.json",
+        ".git",
+        ".gitignore",
+        ".github",
+    }
     for entry in root.iterdir():
         if entry.name not in allowed_root_entries:
             entry_type = "directory" if entry.is_dir() else "file"
