@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import re
 
 
 class Colors:
@@ -36,7 +37,6 @@ def is_temp_entry(path: Path) -> bool:
         "tmp",
         "temp",
         "temporary",
-        ".tmp",
         ".temp",
         "__pycache__",
         ".pytest_cache",
@@ -44,7 +44,7 @@ def is_temp_entry(path: Path) -> bool:
         ".ruff_cache",
         ".cache",
     }
-    temp_suffixes = {".tmp", ".temp", ".swp", ".swo", ".bak", ".old", ".orig", ".rej"}
+    temp_suffixes = {".temp", ".swp", ".swo", ".bak", ".old", ".orig", ".rej"}
 
     if lower_name in temp_exact_names:
         return True
@@ -79,7 +79,7 @@ def validate_structure():
     )
 
     # 1. Mandatory Directories
-    mandatory_dirs = ["docs", "repo", "sessions"]
+    mandatory_dirs = ["docs", "repo", "sessions", ".tmp"]
 
     # 2. Mandatory Files (Strictly from image + requirements)
     mandatory_files = [
@@ -150,7 +150,75 @@ def validate_structure():
             errors.append("Missing session trace (sessions/develop-N.json)")
             print(f"{Colors.FAIL} [✗] Missing session trace in sessions/{Colors.ENDC}")
 
-    # 6. Validate Test Script (Strict check for run_test.sh OR run_tests.sh)
+    # 6. Validate .tmp strictly: exactly 4 files, only allowed names,
+    # and mandatory pairs of audit_report-N.md + audit_report-N-fix_check.md
+    tmp_dir = root / ".tmp"
+    if tmp_dir.is_dir():
+        tmp_entries = list(tmp_dir.iterdir())
+        tmp_files = [e for e in tmp_entries if e.is_file()]
+        tmp_dirs = [e for e in tmp_entries if e.is_dir()]
+
+        if tmp_dirs:
+            for entry in tmp_dirs:
+                errors.append(f"Invalid directory in .tmp/: {entry.name}")
+                print(
+                    f"{Colors.FAIL} [✗] Invalid directory in .tmp/: {entry.name}{Colors.ENDC}"
+                )
+
+        audit_re = re.compile(r"^audit_report-(\d+)\.md$")
+        fix_re = re.compile(r"^audit_report-(\d+)-fix_check\.md$")
+
+        audit_nums = []
+        fix_nums = []
+
+        for file in tmp_files:
+            name = file.name
+            m_audit = audit_re.match(name)
+            m_fix = fix_re.match(name)
+
+            if m_fix:
+                fix_nums.append(m_fix.group(1))
+            elif m_audit:
+                audit_nums.append(m_audit.group(1))
+            else:
+                errors.append(f"Invalid file in .tmp/: {name}")
+                print(f"{Colors.FAIL} [✗] Invalid file in .tmp/: {name}{Colors.ENDC}")
+
+        if len(tmp_files) != 4:
+            errors.append(f".tmp must contain exactly 4 files, found {len(tmp_files)}")
+            print(
+                f"{Colors.FAIL} [✗] .tmp must contain exactly 4 files, found {len(tmp_files)}{Colors.ENDC}"
+            )
+
+        if len(audit_nums) != 2:
+            errors.append(
+                f".tmp must contain exactly 2 audit reports (audit_report-N.md), found {len(audit_nums)}"
+            )
+            print(
+                f"{Colors.FAIL} [✗] Expected 2 audit reports, found {len(audit_nums)}{Colors.ENDC}"
+            )
+
+        if len(fix_nums) != 2:
+            errors.append(
+                f".tmp must contain exactly 2 fix-check reports (audit_report-N-fix_check.md), found {len(fix_nums)}"
+            )
+            print(
+                f"{Colors.FAIL} [✗] Expected 2 fix-check reports, found {len(fix_nums)}{Colors.ENDC}"
+            )
+
+        if sorted(audit_nums) != sorted(fix_nums):
+            errors.append(
+                ".tmp audit report numbers must match fix-check report numbers"
+            )
+            print(
+                f"{Colors.FAIL} [✗] audit_report-N.md and audit_report-N-fix_check.md numbers do not match{Colors.ENDC}"
+            )
+        elif len(audit_nums) == 2 and len(fix_nums) == 2:
+            print(
+                f"{Colors.OKGREEN} [✓] .tmp contains required 4 audit files with matching report numbers{Colors.ENDC}"
+            )
+
+    # 7. Validate Test Script (Strict check for run_test.sh OR run_tests.sh)
     test_options = ["repo/run_test.sh", "repo/run_tests.sh"]
     found_test = next((opt for opt in test_options if (root / opt).is_file()), None)
 
@@ -160,7 +228,7 @@ def validate_structure():
         errors.append("Missing test script (run_test.sh or run_tests.sh)")
         print(f"{Colors.FAIL} [✗] Missing test script{Colors.ENDC}")
 
-    # 7. Validate no temporary files/folders anywhere in project
+    # 8. Validate no temporary files/folders anywhere in project
     for entry in root.rglob("*"):
         if is_temp_entry(entry):
             entry_type = "directory" if entry.is_dir() else "file"

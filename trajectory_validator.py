@@ -22,6 +22,67 @@ RST = "\033[0m"
 WEIGHTS = {"fail": 25, "warn": 8, "pass": 0}
 
 
+def infer_trajectory_flavor(data):
+    meta = data.get("meta", {})
+    sm = meta.get("session_meta", {})
+    if isinstance(meta, dict) and ("subagents" in meta or "merge_stats" in meta):
+        return "claude_merged"
+    if isinstance(sm, dict) and sm.get("source") == "opencode":
+        return "opencode"
+    if isinstance(meta.get("turn_contexts"), list):
+        return "codex_like"
+    return "unknown"
+
+
+def parse_timestamp(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        # OpenCode message metadata timestamp is milliseconds since epoch.
+        if value > 1_000_000_000_000:
+            value = value / 1000
+        try:
+            return datetime.fromtimestamp(value)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except Exception:
+            return None
+    return None
+
+
+def collect_timestamps(data):
+    """Collect timeline timestamps from turn_contexts, then fallback to message metadata."""
+    meta = data.get("meta", {})
+    ctxs = meta.get("turn_contexts", [])
+    times = []
+
+    if isinstance(ctxs, list):
+        for c in ctxs:
+            if not isinstance(c, dict):
+                continue
+            dt = parse_timestamp(c.get("_timestamp"))
+            if dt:
+                times.append(("turn_context", dt))
+
+    if times:
+        return times
+
+    for m in data.get("messages", []):
+        if not isinstance(m, dict):
+            continue
+        md = m.get("_metadata")
+        if not isinstance(md, dict):
+            continue
+        dt = parse_timestamp(md.get("timestamp"))
+        if dt:
+            times.append(("message", dt))
+
+    return times
+
+
 def load_json(path):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -45,43 +106,47 @@ def check_structure(data):
 
 
 def check_session_id(data):
-    sid = data.get("meta", {}).get("session_meta", {}).get("id")
+    sm = data.get("meta", {}).get("session_meta", {})
+    sid = sm.get("id") or sm.get("session_id")
     if sid:
         return "pass", f"Session ID: {sid}"
     return "warn", "No session ID — metadata may have been stripped or manually created"
 
 
 def check_timestamps(data):
-    ctxs = data.get("meta", {}).get("turn_contexts", [])
-    if len(ctxs) < 2:
-        return "pass", "Not enough turn_contexts for temporal analysis"
-    times = []
-    for c in ctxs:
-        ts = c.get("_timestamp")
-        if ts:
-            try:
-                times.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
-            except:
-                pass
+    flavor = infer_trajectory_flavor(data)
+    times = collect_timestamps(data)
     if len(times) < 2:
+        if flavor == "claude_merged":
+            return (
+                "pass",
+                "Not enough parseable timestamps (acceptable for Claude merge output)",
+            )
         return "warn", "Insufficient parseable timestamps"
     flags = []
     for i in range(1, len(times)):
-        delta = (times[i] - times[i - 1]).total_seconds()
+        delta = (times[i][1] - times[i - 1][1]).total_seconds()
         if delta < 0:
             flags.append(f"Turn {i}: BACKWARD by {abs(int(delta))}s")
         elif delta > 14400:
             flags.append(f"Turn {i}: gap of {delta/3600:.1f}h (suspicious)")
     if not flags:
-        return "pass", f"All {len(times)} timestamps are chronologically valid"
+        source = times[0][0]
+        return (
+            "pass",
+            f"All {len(times)} {source}-derived timestamps are chronologically valid",
+        )
     severity = "fail" if any("BACKWARD" in f for f in flags) else "warn"
     return severity, " | ".join(flags)
 
 
 def check_models(data):
+    flavor = infer_trajectory_flavor(data)
     ctxs = data.get("meta", {}).get("turn_contexts", [])
     models = list(dict.fromkeys(c.get("model") for c in ctxs if c.get("model")))
     if not models:
+        if flavor == "claude_merged":
+            return "pass", "No turn_context models (expected for Claude merge output)"
         return "warn", "No model information found in turn_contexts"
     if len(models) == 1:
         return "pass", f"Consistent model: {models[0]}"
@@ -97,8 +162,12 @@ def check_models(data):
 
 
 def check_cwd(data):
+    sm = data.get("meta", {}).get("session_meta", {})
     ctxs = data.get("meta", {}).get("turn_contexts", [])
     cwds = list(dict.fromkeys(c.get("cwd") for c in ctxs if c.get("cwd")))
+    session_cwd = sm.get("cwd")
+    if session_cwd and session_cwd not in cwds:
+        cwds.append(session_cwd)
     if not cwds:
         return "warn", "No working directory info found"
     if len(cwds) == 1:
@@ -111,9 +180,13 @@ def check_cwd(data):
 def check_role_sequence(data):
     msgs = data.get("messages", [])
     flags = []
+
+    def ignorable_repeat(role):
+        return isinstance(role, str) and role.startswith("assistant-subagent-")
+
     for i in range(1, len(msgs)):
         p, c = msgs[i - 1].get("role"), msgs[i].get("role")
-        if p == c and c != "tool":
+        if p == c and c != "tool" and not ignorable_repeat(c):
             flags.append(f"Consecutive '{c}' at index {i}")
     if not flags:
         return "pass", f"Role sequence valid across {len(msgs)} messages"
@@ -121,24 +194,42 @@ def check_role_sequence(data):
 
 
 def check_tool_ids(data):
-    seen, dupes = set(), []
+    seen_scopes = {}
+    strict_dupes, cross_scope_dupes = [], []
+
+    def role_scope(role):
+        if isinstance(role, str) and role.startswith("assistant-subagent-"):
+            return role
+        return "main"
+
     for m in data.get("messages", []):
+        scope = role_scope(m.get("role"))
         for tc in m.get("tool_calls", []):
             tid = tc.get("id")
             if tid:
-                if tid in seen:
-                    dupes.append(tid)
+                if tid in seen_scopes:
+                    if scope in seen_scopes[tid]:
+                        strict_dupes.append(tid)
+                    else:
+                        cross_scope_dupes.append(tid)
+                        seen_scopes[tid].add(scope)
                 else:
-                    seen.add(tid)
-    if not dupes:
-        return "pass", f"All {len(seen)} tool call IDs are unique"
-    return (
-        "fail",
-        f"{len(dupes)} duplicate tool_call_id(s): {', '.join(dupes[:3])} — strong merge indicator",
-    )
+                    seen_scopes[tid] = {scope}
+    if strict_dupes:
+        return (
+            "fail",
+            f"{len(strict_dupes)} duplicate tool_call_id(s) in same scope: {', '.join(strict_dupes[:3])}",
+        )
+    if cross_scope_dupes:
+        return (
+            "warn",
+            f"{len(cross_scope_dupes)} duplicate tool_call_id(s) across scopes: {', '.join(cross_scope_dupes[:3])}",
+        )
+    return "pass", f"All {len(seen_scopes)} tool call IDs are unique"
 
 
 def check_approval_policy(data):
+    flavor = infer_trajectory_flavor(data)
     ctxs = data.get("meta", {}).get("turn_contexts", [])
     policies = list(
         dict.fromkeys(
@@ -146,6 +237,11 @@ def check_approval_policy(data):
         )
     )
     if not policies:
+        if flavor == "claude_merged":
+            return (
+                "pass",
+                "No approval policy in turn_contexts (expected for Claude merge output)",
+            )
         return "warn", "No approval policy found"
     if len(policies) == 1:
         return "pass", f"Consistent policy: {policies[0]}"
@@ -153,6 +249,7 @@ def check_approval_policy(data):
 
 
 def check_originator(data):
+    flavor = infer_trajectory_flavor(data)
     sm = data.get("meta", {}).get("session_meta", {})
     orig = sm.get("originator")
     src = sm.get("source")
@@ -162,6 +259,8 @@ def check_originator(data):
             "pass",
             f"Originator: {orig} | source: {src or 'N/A'} | cli_version: {cli or 'N/A'}",
         )
+    if flavor == "claude_merged":
+        return "pass", "No originator info (expected for Claude merge output)"
     return "warn", "No originator info — metadata may have been stripped"
 
 
@@ -187,6 +286,7 @@ def check_content_density(data):
 
 
 def check_collab_mode(data):
+    flavor = infer_trajectory_flavor(data)
     ctxs = data.get("meta", {}).get("turn_contexts", [])
     modes = list(
         dict.fromkeys(
@@ -196,6 +296,11 @@ def check_collab_mode(data):
         )
     )
     if not modes:
+        if flavor == "claude_merged":
+            return (
+                "pass",
+                "No collaboration mode in turn_contexts (expected for Claude merge output)",
+            )
         return "warn", "No collaboration mode found"
     if len(modes) == 1:
         return "pass", f"Consistent mode: {modes[0]}"
