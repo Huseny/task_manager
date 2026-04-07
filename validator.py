@@ -152,6 +152,7 @@ def validate_structure():
         "docs",
         "repo",
         "sessions",
+        ".tmp",
         "metadata.json",
         ".git",
         ".gitignore",
