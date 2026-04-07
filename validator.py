@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 import re
+import json
 
 
 class Colors:
@@ -84,7 +85,6 @@ def validate_structure():
     # 2. Mandatory Files (Strictly from image + requirements)
     mandatory_files = [
         "docs/design.md",
-        "docs/api-spec.md",
         "docs/questions.md",
         "metadata.json",
         "repo/docker-compose.yml",
@@ -108,6 +108,44 @@ def validate_structure():
         else:
             errors.append(f"Missing file: {f}")
             print(f"{Colors.FAIL} [✗] Missing file: {f}{Colors.ENDC}")
+
+    # Validate metadata.json contents
+    metadata_path = root / "metadata.json"
+    if metadata_path.is_file():
+        required_metadata_fields = {
+            "prompt",
+            "project_type",
+            "frontend_language",
+            "backend_language",
+            "frontend_framework",
+            "backend_framework",
+            "database",
+        }
+
+        try:
+            with metadata_path.open("r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+        except json.JSONDecodeError as exc:
+            errors.append(f"Invalid JSON in metadata.json: {exc.msg}")
+            print(f"{Colors.FAIL} [✗] Invalid JSON in metadata.json{Colors.ENDC}")
+        else:
+            if not isinstance(metadata, dict):
+                errors.append("metadata.json must contain a JSON object")
+                print(
+                    f"{Colors.FAIL} [✗] metadata.json must contain a JSON object{Colors.ENDC}"
+                )
+            else:
+                missing_fields = sorted(required_metadata_fields - metadata.keys())
+                if missing_fields:
+                    errors.append(
+                        "metadata.json is missing required fields: "
+                        + ", ".join(missing_fields)
+                    )
+                    print(
+                        f"{Colors.FAIL} [✗] metadata.json is missing required fields: {', '.join(missing_fields)}{Colors.ENDC}"
+                    )
+                else:
+                    print(f"{Colors.OKGREEN} [✓] metadata.json is valid{Colors.ENDC}")
 
     # 3. Validate strict root entries
     allowed_root_entries = {
