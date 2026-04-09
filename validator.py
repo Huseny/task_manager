@@ -136,6 +136,8 @@ def validate_structure():
                 )
             else:
                 missing_fields = sorted(required_metadata_fields - metadata.keys())
+                extra_fields = sorted(metadata.keys() - required_metadata_fields)
+
                 if missing_fields:
                     errors.append(
                         "metadata.json is missing required fields: "
@@ -144,7 +146,17 @@ def validate_structure():
                     print(
                         f"{Colors.FAIL} [✗] metadata.json is missing required fields: {', '.join(missing_fields)}{Colors.ENDC}"
                     )
-                else:
+
+                if extra_fields:
+                    errors.append(
+                        "metadata.json has unexpected fields: "
+                        + ", ".join(extra_fields)
+                    )
+                    print(
+                        f"{Colors.FAIL} [✗] metadata.json has unexpected fields: {', '.join(extra_fields)}{Colors.ENDC}"
+                    )
+
+                if not missing_fields and not extra_fields:
                     print(f"{Colors.OKGREEN} [✓] metadata.json is valid{Colors.ENDC}")
 
     # 3. Validate strict root entries
@@ -177,17 +189,38 @@ def validate_structure():
                     f"{Colors.FAIL} [✗] Invalid {entry_type} in docs/: {entry.name}{Colors.ENDC}"
                 )
 
-    # 5. Validate Session Files (Strict check for develop-N.json)
+    # 5. Validate Session Files
     sessions_dir = root / "sessions"
     if sessions_dir.is_dir():
-        session_files = list(sessions_dir.glob("develop-*.json"))
-        if session_files:
-            print(
-                f"{Colors.OKGREEN} [✓] Session trace found: {session_files[0].name}{Colors.ENDC}"
-            )
-        else:
+        develop_re = re.compile(r"^develop-\d+\.json$")
+        bugfix_re = re.compile(r"^bugfix-\d+\.json$")
+
+        develop_files = [
+            p
+            for p in sessions_dir.iterdir()
+            if p.is_file() and develop_re.match(p.name)
+        ]
+        bugfix_files = [
+            p for p in sessions_dir.iterdir() if p.is_file() and bugfix_re.match(p.name)
+        ]
+
+        if len(develop_files) < 1:
             errors.append("Missing session trace (sessions/develop-N.json)")
             print(f"{Colors.FAIL} [✗] Missing session trace in sessions/{Colors.ENDC}")
+        else:
+            print(
+                f"{Colors.OKGREEN} [✓] develop-N.json files found: {len(develop_files)}{Colors.ENDC}"
+            )
+
+        if len(bugfix_files) < 2:
+            errors.append("Expected at least 2 bugfix traces (sessions/bugfix-N.json)")
+            print(
+                f"{Colors.FAIL} [✗] Expected at least 2 bugfix traces in sessions/, found {len(bugfix_files)}{Colors.ENDC}"
+            )
+        else:
+            print(
+                f"{Colors.OKGREEN} [✓] bugfix-N.json files found: {len(bugfix_files)}{Colors.ENDC}"
+            )
 
     # 6. Validate .tmp strictly: exactly 4 files, only allowed names,
     # and mandatory pairs of audit_report-N.md + audit_report-N-fix_check.md
