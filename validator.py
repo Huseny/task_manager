@@ -73,6 +73,7 @@ def validate_structure():
             f"{Colors.FAIL}Error: Could not automatically detect project root.{Colors.ENDC}"
         )
         print("Ensure you are inside the TASK folder (containing metadata.json).")
+        sys.exit(1)
         return False
 
     print(
