@@ -125,6 +125,7 @@ phases:
         fi
 
         echo "\n==================== TEST SUITE ====================" >> "$COMBINED_LOG"
+        $COMPOSE_CMD stop >> "$COMBINED_LOG" 2>&1 || true
         TEST_SCRIPT=""
         [ -f "run_tests.sh" ] && TEST_SCRIPT="run_tests.sh"
         [ -f "run_test.sh" ] && [ -z "$TEST_SCRIPT" ] && TEST_SCRIPT="run_test.sh"
