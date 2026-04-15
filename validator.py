@@ -190,7 +190,9 @@ def validate_structure():
                 )
 
     # 6. Validate .tmp strictly: exactly 4 files, only allowed names,
-    # and mandatory pairs of audit_report-N.md + audit_report-N-fix_check.md
+    # and one of these valid layouts:
+    # - 2 audit reports + 2 matching fix-check reports
+    # - 3 audit reports + 1 fix-check for report 1 only
     tmp_dir = root / ".tmp"
     if tmp_dir.is_dir():
         tmp_entries = list(tmp_dir.iterdir())
@@ -229,32 +231,67 @@ def validate_structure():
                 f"{Colors.FAIL} [✗] .tmp must contain exactly 4 files, found {len(tmp_files)}{Colors.ENDC}"
             )
 
-        if len(audit_nums) != 2:
+        valid_tmp_layout = True
+
+        if len(fix_nums) not in {1, 2}:
+            valid_tmp_layout = False
             errors.append(
-                f".tmp must contain exactly 2 audit reports (audit_report-N.md), found {len(audit_nums)}"
+                f".tmp must contain either 1 or 2 fix-check reports (audit_report-N-fix_check.md), found {len(fix_nums)}"
             )
             print(
-                f"{Colors.FAIL} [✗] Expected 2 audit reports, found {len(audit_nums)}{Colors.ENDC}"
+                f"{Colors.FAIL} [✗] Expected 1 or 2 fix-check reports, found {len(fix_nums)}{Colors.ENDC}"
             )
 
-        if len(fix_nums) != 2:
-            errors.append(
-                f".tmp must contain exactly 2 fix-check reports (audit_report-N-fix_check.md), found {len(fix_nums)}"
-            )
-            print(
-                f"{Colors.FAIL} [✗] Expected 2 fix-check reports, found {len(fix_nums)}{Colors.ENDC}"
-            )
+        if len(fix_nums) == 2:
+            if len(audit_nums) != 2:
+                valid_tmp_layout = False
+                errors.append(
+                    f"When .tmp has 2 fix-check reports, it must have 2 audit reports, found {len(audit_nums)}"
+                )
+                print(
+                    f"{Colors.FAIL} [✗] With 2 fix-check reports, expected 2 audit reports, found {len(audit_nums)}{Colors.ENDC}"
+                )
 
-        if sorted(audit_nums) != sorted(fix_nums):
-            errors.append(
-                ".tmp audit report numbers must match fix-check report numbers"
-            )
+            if sorted(audit_nums) != sorted(fix_nums):
+                valid_tmp_layout = False
+                errors.append(
+                    ".tmp audit report numbers must match fix-check report numbers when 2 fix-check reports are present"
+                )
+                print(
+                    f"{Colors.FAIL} [✗] audit_report-N.md and audit_report-N-fix_check.md numbers do not match{Colors.ENDC}"
+                )
+
+        elif len(fix_nums) == 1:
+            if len(audit_nums) != 3:
+                valid_tmp_layout = False
+                errors.append(
+                    f"When .tmp has 1 fix-check report, it must have 3 audit reports, found {len(audit_nums)}"
+                )
+                print(
+                    f"{Colors.FAIL} [✗] With 1 fix-check report, expected 3 audit reports, found {len(audit_nums)}{Colors.ENDC}"
+                )
+
+            if fix_nums[0] != "1":
+                valid_tmp_layout = False
+                errors.append(
+                    "When only one fix-check report exists, it must be audit_report-1-fix_check.md"
+                )
+                print(
+                    f"{Colors.FAIL} [✗] Single fix-check report must be for report 1{Colors.ENDC}"
+                )
+
+            if "3" not in audit_nums:
+                valid_tmp_layout = False
+                errors.append(
+                    "When only one fix-check report exists, .tmp must include audit_report-3.md"
+                )
+                print(
+                    f"{Colors.FAIL} [✗] Missing required audit_report-3.md when only one fix-check exists{Colors.ENDC}"
+                )
+
+        if valid_tmp_layout and len(tmp_files) == 4:
             print(
-                f"{Colors.FAIL} [✗] audit_report-N.md and audit_report-N-fix_check.md numbers do not match{Colors.ENDC}"
-            )
-        elif len(audit_nums) == 2 and len(fix_nums) == 2:
-            print(
-                f"{Colors.OKGREEN} [✓] .tmp contains required 4 audit files with matching report numbers{Colors.ENDC}"
+                f"{Colors.OKGREEN} [✓] .tmp contains a valid 4-file audit/fix-check layout{Colors.ENDC}"
             )
 
     # 7. Validate Test Script (Strict check for run_test.sh OR run_tests.sh)
