@@ -65,6 +65,16 @@ def is_temp_entry(path: Path) -> bool:
     return False
 
 
+ALLOWED_PROJECT_TYPES = {
+    "web",
+    "server",
+    "fullstack",
+    "android",
+    "ios",
+    "desktop",
+}
+
+
 def validate_structure():
     root = get_validation_root()
 
@@ -138,6 +148,7 @@ def validate_structure():
             else:
                 missing_fields = sorted(required_metadata_fields - metadata.keys())
                 extra_fields = sorted(metadata.keys() - required_metadata_fields)
+                project_type = metadata.get("project_type")
 
                 if missing_fields:
                     errors.append(
@@ -157,7 +168,25 @@ def validate_structure():
                         f"{Colors.FAIL} [✗] metadata.json has unexpected fields: {', '.join(extra_fields)}{Colors.ENDC}"
                     )
 
-                if not missing_fields and not extra_fields:
+                if "project_type" not in missing_fields:
+                    if (
+                        not isinstance(project_type, str)
+                        or project_type not in ALLOWED_PROJECT_TYPES
+                    ):
+                        errors.append(
+                            "metadata.json project_type must be one of: "
+                            + ", ".join(sorted(ALLOWED_PROJECT_TYPES))
+                        )
+                        print(
+                            f"{Colors.FAIL} [✗] metadata.json project_type must be one of: {', '.join(sorted(ALLOWED_PROJECT_TYPES))}{Colors.ENDC}"
+                        )
+
+                if (
+                    not missing_fields
+                    and not extra_fields
+                    and isinstance(project_type, str)
+                    and project_type in ALLOWED_PROJECT_TYPES
+                ):
                     print(f"{Colors.OKGREEN} [✓] metadata.json is valid{Colors.ENDC}")
 
     # 3. Validate strict root entries
