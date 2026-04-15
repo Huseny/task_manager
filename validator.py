@@ -218,8 +218,8 @@ def validate_structure():
                     f"{Colors.FAIL} [✗] Invalid {entry_type} in docs/: {entry.name}{Colors.ENDC}"
                 )
 
-    # 6. Validate .tmp strictly: exactly 4 files, only allowed names,
-    # and one of these valid layouts:
+    # 6. Validate .tmp strictly: audit/fix reports plus required coverage/readme audit,
+    # and one of these valid layouts for audit/fix reports:
     # - 2 audit reports + 2 matching fix-check reports
     # - 3 audit reports + 1 fix-check for report 1 only
     tmp_dir = root / ".tmp"
@@ -227,6 +227,7 @@ def validate_structure():
         tmp_entries = list(tmp_dir.iterdir())
         tmp_files = [e for e in tmp_entries if e.is_file()]
         tmp_dirs = [e for e in tmp_entries if e.is_dir()]
+        required_extra_file = "test_coverage_and_readme_audit_report.md"
 
         if tmp_dirs:
             for entry in tmp_dirs:
@@ -240,6 +241,8 @@ def validate_structure():
 
         audit_nums = []
         fix_nums = []
+        report_files = []
+        required_file_count = 0
 
         for file in tmp_files:
             name = file.name
@@ -248,16 +251,46 @@ def validate_structure():
 
             if m_fix:
                 fix_nums.append(m_fix.group(1))
+                report_files.append(name)
             elif m_audit:
                 audit_nums.append(m_audit.group(1))
+                report_files.append(name)
+            elif name == required_extra_file:
+                required_file_count += 1
             else:
                 errors.append(f"Invalid file in .tmp/: {name}")
                 print(f"{Colors.FAIL} [✗] Invalid file in .tmp/: {name}{Colors.ENDC}")
 
-        if len(tmp_files) != 4:
-            errors.append(f".tmp must contain exactly 4 files, found {len(tmp_files)}")
+        if required_file_count > 1:
+            errors.append(
+                ".tmp must contain exactly one test_coverage_and_readme_audit_report.md file"
+            )
             print(
-                f"{Colors.FAIL} [✗] .tmp must contain exactly 4 files, found {len(tmp_files)}{Colors.ENDC}"
+                f"{Colors.FAIL} [✗] Duplicate required file found: {required_extra_file}{Colors.ENDC}"
+            )
+
+        if required_file_count == 0:
+            errors.append(f"Missing required file in .tmp/: {required_extra_file}")
+            print(
+                f"{Colors.FAIL} [✗] Missing required file in .tmp/: {required_extra_file}{Colors.ENDC}"
+            )
+
+        if len(report_files) != 4:
+            errors.append(
+                f".tmp must contain exactly 4 audit/fix-check files, found {len(report_files)}"
+            )
+            print(
+                f"{Colors.FAIL} [✗] .tmp must contain exactly 4 audit/fix-check files, found {len(report_files)}{Colors.ENDC}"
+            )
+
+        expected_total_files = 5
+        if len(tmp_files) != expected_total_files:
+            errors.append(
+                ".tmp must contain 4 audit/fix-check files and required "
+                f"{required_extra_file}; found {len(tmp_files)} files"
+            )
+            print(
+                f"{Colors.FAIL} [✗] .tmp must contain exactly 5 files, found {len(tmp_files)}{Colors.ENDC}"
             )
 
         valid_tmp_layout = True
@@ -318,9 +351,14 @@ def validate_structure():
                     f"{Colors.FAIL} [✗] Missing required audit_report-3.md when only one fix-check exists{Colors.ENDC}"
                 )
 
-        if valid_tmp_layout and len(tmp_files) == 4:
+        if (
+            valid_tmp_layout
+            and len(report_files) == 4
+            and len(tmp_files) == expected_total_files
+            and required_file_count == 1
+        ):
             print(
-                f"{Colors.OKGREEN} [✓] .tmp contains a valid 4-file audit/fix-check layout{Colors.ENDC}"
+                f"{Colors.OKGREEN} [✓] .tmp contains a valid 4-file audit/fix-check layout plus required {required_extra_file}{Colors.ENDC}"
             )
 
     # 7. Validate Test Script (Strict check for run_test.sh OR run_tests.sh)
