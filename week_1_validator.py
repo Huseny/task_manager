@@ -209,13 +209,15 @@ def validate_structure():
                     f"{Colors.FAIL} [✗] Invalid {entry_type} in docs/: {entry.name}{Colors.ENDC}"
                 )
 
-    # Week 1 .tmp policy: exactly four markdown report files and nothing else.
+    # Week 1 .tmp policy: five markdown files total, including the required
+    # test_coverage_and_readme_audit_report.md file, and nothing else.
     tmp_dir = root / ".tmp"
     if tmp_dir.is_dir():
         tmp_entries = list(tmp_dir.iterdir())
         tmp_dirs = [e for e in tmp_entries if e.is_dir()]
         tmp_files = [e for e in tmp_entries if e.is_file()]
         md_files = [e for e in tmp_files if e.suffix.lower() == ".md"]
+        required_report_file = "test_coverage_and_readme_audit_report.md"
 
         if tmp_dirs:
             for entry in tmp_dirs:
@@ -230,23 +232,40 @@ def validate_structure():
                 errors.append(f"Invalid file in .tmp/: {entry.name}")
                 print(f"{Colors.FAIL} [✗] Invalid file in .tmp/: {entry.name}{Colors.ENDC}")
 
-        if len(md_files) != 4:
-            errors.append(f".tmp must contain exactly 4 .md report files, found {len(md_files)}")
+        required_report_matches = [
+            e for e in md_files if e.name == required_report_file
+        ]
+        if not required_report_matches:
+            errors.append(f"Missing required file in .tmp/: {required_report_file}")
             print(
-                f"{Colors.FAIL} [✗] .tmp must contain exactly 4 .md report files, found {len(md_files)}{Colors.ENDC}"
+                f"{Colors.FAIL} [✗] Missing required file in .tmp/: {required_report_file}{Colors.ENDC}"
             )
 
-        if len(tmp_entries) != 4:
+        if len(md_files) != 5:
             errors.append(
-                f".tmp must contain only 4 .md files and nothing else, found {len(tmp_entries)} entries"
+                f".tmp must contain exactly 5 .md report files, found {len(md_files)}"
             )
             print(
-                f"{Colors.FAIL} [✗] .tmp must contain only 4 .md files and nothing else, found {len(tmp_entries)} entries{Colors.ENDC}"
+                f"{Colors.FAIL} [✗] .tmp must contain exactly 5 .md report files, found {len(md_files)}{Colors.ENDC}"
             )
 
-        if len(md_files) == 4 and len(tmp_entries) == 4 and not tmp_dirs and not non_md_files:
+        if len(tmp_entries) != 5:
+            errors.append(
+                f".tmp must contain only 5 .md files and nothing else, found {len(tmp_entries)} entries"
+            )
             print(
-                f"{Colors.OKGREEN} [✓] .tmp contains exactly four .md report files with no extra entries{Colors.ENDC}"
+                f"{Colors.FAIL} [✗] .tmp must contain only 5 .md files and nothing else, found {len(tmp_entries)} entries{Colors.ENDC}"
+            )
+
+        if (
+            len(md_files) == 5
+            and len(tmp_entries) == 5
+            and not tmp_dirs
+            and not non_md_files
+            and required_report_matches
+        ):
+            print(
+                f"{Colors.OKGREEN} [✓] .tmp contains the required audit report plus four additional .md files with no extra entries{Colors.ENDC}"
             )
 
     test_options = ["repo/run_test.sh", "repo/run_tests.sh"]
