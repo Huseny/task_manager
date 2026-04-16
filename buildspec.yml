@@ -33,7 +33,7 @@ phases:
 
         echo "==================== DOCKER ====================" >> "$COMBINED_LOG"
         docker --version >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Docker not available"
-        docker info >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Docker daemon not available — ensure CodeBuild project has privilegedMode=true"
+        docker info > /dev/null 2>&1 || fail_and_upload "Docker daemon not available — ensure CodeBuild project has privilegedMode=true"
 
   pre_build:
     commands:
