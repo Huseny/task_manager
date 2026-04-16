@@ -31,35 +31,9 @@ phases:
           exit 1
         }
 
-        install_docker_quietly() {
-          if command -v apt-get >/dev/null 2>&1; then
-            apt-get update >/dev/null 2>&1 || return 1
-            apt-get install -y ca-certificates curl gnupg >/dev/null 2>&1 || return 1
-            install -m 0755 -d /etc/apt/keyrings || return 1
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc >/dev/null 2>&1 || return 1
-            chmod a+r /etc/apt/keyrings/docker.asc || return 1
-            . /etc/os-release
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list || return 1
-            apt-get update >/dev/null 2>&1 || return 1
-            apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null 2>&1 || return 1
-          elif command -v yum >/dev/null 2>&1; then
-            yum install -y yum-utils >/dev/null 2>&1 || return 1
-            yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >/dev/null 2>&1 || return 1
-            yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null 2>&1 || return 1
-          else
-            return 1
-          fi
-          return 0
-        }
-
-        if install_docker_quietly; then
-          echo "[INFO] Docker install finished" >> "$COMBINED_LOG"
-        else
-          fail_and_upload "Docker install failed"
-        fi
-
-        docker --version >/dev/null 2>&1 || fail_and_upload "Docker not available after installation"
-        docker info >/dev/null 2>&1 || fail_and_upload "Docker daemon not available — ensure CodeBuild project has privilegedMode=true"
+        echo "==================== DOCKER ====================" >> "$COMBINED_LOG"
+        docker --version >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Docker not available"
+        docker info >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Docker daemon not available — ensure CodeBuild project has privilegedMode=true"
 
   pre_build:
     commands:
