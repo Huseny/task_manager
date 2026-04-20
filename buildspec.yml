@@ -10,6 +10,7 @@ env:
   secrets-manager:
     DOCKER_USER: "dockerhub/creds:username"
     DOCKER_TOKEN: "dockerhub/creds:password"
+    GITHUB_PAT: "github/pat:token"
 
 phases:
   install:
@@ -51,6 +52,10 @@ phases:
         }
 
         echo "==================== GIT CLONE ====================" >> "$COMBINED_LOG"
+        if [ -n "${GITHUB_PAT:-}" ]; then
+          git config --global url."https://${GITHUB_PAT}@github.com/".insteadOf "https://github.com/"
+        fi
+
         if ! git clone "${repo_url}" "$CLONE_DIR" >> "$COMBINED_LOG" 2>&1; then
           fail_and_upload "git clone failed"
         fi
