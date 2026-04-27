@@ -1,0 +1,1762 @@
+#!/usr/bin/env python3
+"""
+Fetch tasks by task ID (from a text file), assemble a clean delivery package
+per task, validate it, and emit one zip per task.
+
+This is the text-file-driven variant of run_reconstruction_export_from_folder.py:
+task IDs come from a flat text file (one per line). There is no extra
+sessions folder to merge in -- the only session source is the archive linked
+on the task itself. Otherwise, the per-task pipeline is identical: clone repo,
+download + extract + flatten + normalize sessions, sync metadata.json prompt
+and project info from Aquila, rename JSONLs to match sessionId, trim trailing
+non-assistant messages, ensure minimum token cost, remove git artifacts, move
+.tmp aside, zip, and validate via validate_package_direct_original_sessions.
+"""
+
+from __future__ import annotations
+
+import argparse
+import http.cookiejar
+import json
+import logging
+import random
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+import uuid
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from normalize_sessions_zip import run_original_sessions_dir
+
+
+DEFAULT_TASK_URL_TEMPLATE = "https://api.aquila-core.net/api/v1/mindflow-tasks/mindflow-id/{task_id}"
+AQUILA_BEARER_TOKEN = ""
+GITHUB_PAT = ""
+GIT_ARTIFACT_NAMES = {
+    ".git",
+    ".gitignore",
+    ".gitattributes",
+    ".gitmodules",
+    ".github",
+}
+ZIP_NOISE_NAMES = {"__macosx", ".ds_store"}
+
+log = logging.getLogger("export_tasks")
+
+
+def setup_logging(verbose: bool = False) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(level)
+
+
+def sanitize_name(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    return cleaned.strip("._-") or "unknown"
+
+
+def first_non_empty(values: list[Any]) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def http_get_json(url: str, bearer_token: str) -> Any:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {bearer_token}",
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    with urllib.request.urlopen(req) as response:
+        raw = response.read().decode("utf-8", errors="replace")
+    return json.loads(raw)
+
+
+def build_task_url(task_url_template: str, task_id: str) -> str:
+    encoded_task_id = urllib.parse.quote(task_id, safe="")
+    if "{task_id}" in task_url_template:
+        return task_url_template.format(task_id=encoded_task_id)
+    if "{t_id}" in task_url_template:
+        return task_url_template.format(t_id=encoded_task_id)
+    if task_url_template.rstrip("/").endswith("/t_id"):
+        return task_url_template.rstrip("/")[: -len("/t_id")] + f"/{encoded_task_id}"
+    return task_url_template.rstrip("/") + f"/{encoded_task_id}"
+
+
+def extract_single_task(payload: Any) -> dict[str, Any] | None:
+    if isinstance(payload, dict):
+        for key in ("item", "data", "task", "result"):
+            candidate = payload.get(key)
+            if isinstance(candidate, dict):
+                return candidate
+        if payload:
+            return payload
+    return None
+
+
+def parse_task_ids(task_ids_file: str) -> list[str]:
+    file_path = Path(task_ids_file)
+    if not file_path.exists():
+        raise FileNotFoundError(f"Task IDs file not found: {file_path}")
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for line in file_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped in seen:
+            continue
+        ordered.append(stripped)
+        seen.add(stripped)
+    return ordered
+
+
+def is_uuid_filename(stem: str) -> bool:
+    try:
+        uuid.UUID(stem)
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
+def extract_task_id(task: dict[str, Any]) -> str:
+    return first_non_empty(
+        [
+            task.get("mindflow_id"),
+            task.get("task_id"),
+            task.get("id"),
+        ]
+    ) or "unknown_task"
+
+
+def detect_repo_url(task: dict[str, Any]) -> str | None:
+    direct = first_non_empty([task.get("github_link")])
+    if direct and "github.com" in direct:
+        return direct
+    return None
+
+
+def detect_aquila_prompt(task: dict[str, Any]) -> str | None:
+    return first_non_empty([task.get("prompt_text")])
+
+
+def _normalize_prompt_for_compare(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def sync_metadata_prompt_with_aquila(
+    repo_dir: Path, aquila_prompt: str | None
+) -> dict[str, Any]:
+    metadata_path = repo_dir / "metadata.json"
+    if not metadata_path.is_file():
+        log.warning(
+            "metadata.json not found at %s; skipping prompt sync", metadata_path
+        )
+        return {"performed": False, "reason": "metadata_missing"}
+
+    if not aquila_prompt or not aquila_prompt.strip():
+        log.warning(
+            "Aquila task has no prompt_text; skipping prompt sync (metadata.json kept as-is)"
+        )
+        return {"performed": False, "reason": "no_aquila_prompt"}
+
+    try:
+        raw = metadata_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        log.warning("cannot read metadata.json: %s; skipping prompt sync", exc)
+        return {"performed": False, "reason": "metadata_unreadable"}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        log.warning("metadata.json is not valid JSON: %s; skipping prompt sync", exc)
+        return {"performed": False, "reason": "metadata_invalid_json"}
+    if not isinstance(parsed, dict):
+        log.warning("metadata.json root is not a JSON object; skipping prompt sync")
+        return {"performed": False, "reason": "metadata_not_object"}
+
+    existing = parsed.get("prompt")
+    existing_str = existing if isinstance(existing, str) else ""
+    norm_existing = _normalize_prompt_for_compare(existing_str)
+    norm_aquila = _normalize_prompt_for_compare(aquila_prompt)
+
+    if norm_existing == norm_aquila:
+        return {
+            "performed": True,
+            "reason": "already_matches",
+            "updated": False,
+            "metadata_prompt_len": len(existing_str),
+            "aquila_prompt_len": len(aquila_prompt),
+        }
+
+    parsed["prompt"] = aquila_prompt
+    metadata_path.write_text(
+        json.dumps(parsed, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    log.info(
+        "metadata.json prompt updated to Aquila prompt_text "
+        "(old_len=%d, new_len=%d)",
+        len(existing_str),
+        len(aquila_prompt),
+    )
+    return {
+        "performed": True,
+        "reason": "updated",
+        "updated": True,
+        "previous_prompt_len": len(existing_str),
+        "aquila_prompt_len": len(aquila_prompt),
+    }
+
+
+PROJECT_FIELD_MAP: dict[str, str] = {
+    "project_type": "project_type",
+    "frontend_framework": "frontend_tech_stack",
+    "backend_framework": "backend_stack",
+}
+PROJECT_FIELDS_TO_NORMALIZE: tuple[str, ...] = (
+    "project_type",
+    "backend_language",
+    "frontend_language",
+    "frontend_framework",
+    "backend_framework",
+)
+
+
+def _normalize_aquila_project_value(value: Any) -> str:
+    if value is None:
+        return "none"
+    if isinstance(value, list):
+        parts = [str(v).strip() for v in value if v is not None and str(v).strip()]
+        return ", ".join(parts) if parts else "none"
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else "none"
+    return str(value)
+
+
+def _project_value_is_nullish(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    return False
+
+
+def _project_value_is_effectively_none(value: Any) -> bool:
+    if _project_value_is_nullish(value):
+        return True
+    if isinstance(value, str) and value.strip().lower() == "none":
+        return True
+    return False
+
+
+def _project_value_equal(a: Any, b: Any) -> bool:
+    def _norm(v: Any) -> str:
+        if v is None:
+            return ""
+        return str(v).strip().lower()
+
+    return _norm(a) == _norm(b)
+
+
+def sync_metadata_project_info_with_aquila(
+    repo_dir: Path, task: dict[str, Any]
+) -> dict[str, Any]:
+    metadata_path = repo_dir / "metadata.json"
+    if not metadata_path.is_file():
+        log.warning(
+            "metadata.json not found at %s; skipping project info sync", metadata_path
+        )
+        return {"performed": False, "reason": "metadata_missing"}
+    try:
+        raw = metadata_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        log.warning("cannot read metadata.json: %s; skipping project info sync", exc)
+        return {"performed": False, "reason": "metadata_unreadable"}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        log.warning(
+            "metadata.json is not valid JSON: %s; skipping project info sync", exc
+        )
+        return {"performed": False, "reason": "metadata_invalid_json"}
+    if not isinstance(parsed, dict):
+        log.warning(
+            "metadata.json root is not a JSON object; skipping project info sync"
+        )
+        return {"performed": False, "reason": "metadata_not_object"}
+
+    changes: dict[str, dict[str, Any]] = {}
+    for meta_field in PROJECT_FIELDS_TO_NORMALIZE:
+        aquila_field = PROJECT_FIELD_MAP.get(meta_field)
+        current = parsed.get(meta_field)
+
+        if aquila_field is not None:
+            new_value = _normalize_aquila_project_value(task.get(aquila_field))
+            if not _project_value_equal(current, new_value):
+                parsed[meta_field] = new_value
+                changes[meta_field] = {"old": current, "new": new_value}
+        else:
+            if _project_value_is_nullish(current):
+                parsed[meta_field] = "none"
+                changes[meta_field] = {"old": current, "new": "none"}
+
+    if _project_value_is_effectively_none(parsed.get("backend_framework")):
+        current_lang = parsed.get("backend_language")
+        if not _project_value_is_effectively_none(current_lang):
+            parsed["backend_language"] = "none"
+            existing = changes.get("backend_language")
+            old_value = existing["old"] if existing else current_lang
+            changes["backend_language"] = {"old": old_value, "new": "none"}
+
+    if _project_value_is_effectively_none(parsed.get("frontend_framework")):
+        current_lang = parsed.get("frontend_language")
+        if not _project_value_is_effectively_none(current_lang):
+            parsed["frontend_language"] = "none"
+            existing = changes.get("frontend_language")
+            old_value = existing["old"] if existing else current_lang
+            changes["frontend_language"] = {"old": old_value, "new": "none"}
+
+    if changes:
+        metadata_path.write_text(
+            json.dumps(parsed, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        log.info(
+            "metadata.json project info updated for fields: %s",
+            list(changes.keys()),
+        )
+
+    return {
+        "performed": True,
+        "fields_changed": list(changes.keys()),
+        "changes": changes,
+    }
+
+
+def detect_sessions_zip_url(task: dict[str, Any]) -> str | None:
+    session_links = task.get("session_files_links")
+    if isinstance(session_links, list):
+        return session_links[0] if session_links else None
+    elif isinstance(session_links, str):
+        return session_links if session_links.strip() else None
+    return None
+
+
+def add_pat_to_github_url(repo_url: str, github_pat: str) -> str:
+    parsed = urllib.parse.urlsplit(repo_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"Unsupported repo URL scheme: {repo_url}")
+
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError(f"Could not parse GitHub host from URL: {repo_url}")
+
+    host_port = host if parsed.port is None else f"{host}:{parsed.port}"
+    quoted_pat = urllib.parse.quote(github_pat, safe="")
+    netloc = f"x-access-token:{quoted_pat}@{host_port}"
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
+
+
+def clone_repo(repo_url: str, github_pat: str, target_dir: Path) -> None:
+    authed_url = add_pat_to_github_url(repo_url, github_pat)
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "clone", "--depth", "1", authed_url, str(target_dir)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def download_file(url: str, out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if is_google_drive_url(url):
+        download_google_drive_file(url, out_path)
+    else:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req) as response, out_path.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+
+
+def is_google_drive_url(url: str) -> bool:
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    return host in {"drive.google.com", "docs.google.com"}
+
+
+def extract_google_drive_file_id(url: str) -> str | None:
+    parsed = urllib.parse.urlsplit(url)
+    query = urllib.parse.parse_qs(parsed.query)
+    if "id" in query and query["id"]:
+        return query["id"][0]
+
+    match = re.search(r"/file/d/([^/]+)", parsed.path)
+    if match:
+        return match.group(1)
+
+    return None
+
+
+def _download_with_opener(
+    opener: urllib.request.OpenerDirector,
+    url: str,
+    out_path: Path,
+    cookie_jar: http.cookiejar.CookieJar,
+) -> tuple[bool, str]:
+    req = urllib.request.Request(url, method="GET")
+    with opener.open(req) as response:
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        content_disposition = (
+            response.headers.get("Content-Disposition") or ""
+        ).lower()
+
+        if "attachment" in content_disposition or "application/zip" in content_type:
+            with out_path.open("wb") as handle:
+                shutil.copyfileobj(response, handle)
+            return True, ""
+
+        body = response.read().decode("utf-8", errors="replace")
+
+    confirm_token = ""
+    for cookie in cookie_jar:
+        if cookie.name.startswith("download_warning"):
+            confirm_token = str(cookie.value or "")
+            break
+
+    if not confirm_token:
+        match = re.search(r"confirm=([0-9A-Za-z_-]+)", body)
+        if match:
+            confirm_token = match.group(1)
+
+    return False, confirm_token
+
+
+def download_google_drive_file(url: str, out_path: Path) -> None:
+    file_id = extract_google_drive_file_id(url)
+    if not file_id:
+        raise ValueError(f"Could not extract Google Drive file id from URL: {url}")
+
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+
+    base_url = (
+        "https://drive.google.com/uc?export=download&id="
+        f"{urllib.parse.quote(file_id, safe='')}"
+    )
+    downloaded, confirm_token = _download_with_opener(
+        opener=opener,
+        url=base_url,
+        out_path=out_path,
+        cookie_jar=cookie_jar,
+    )
+    if not downloaded:
+        if not confirm_token:
+            raise ValueError("Google Drive download confirmation token not found")
+        confirmed_url = (
+            "https://drive.google.com/uc?export=download"
+            f"&confirm={urllib.parse.quote(confirm_token, safe='')}"
+            f"&id={urllib.parse.quote(file_id, safe='')}"
+        )
+        downloaded, _ = _download_with_opener(
+            opener=opener,
+            url=confirmed_url,
+            out_path=out_path,
+            cookie_jar=cookie_jar,
+        )
+        if not downloaded:
+            raise ValueError("Google Drive file download failed after confirmation")
+
+    if not (zipfile.is_zipfile(out_path) or is_rar_file(out_path)):
+        raise ValueError(
+            "Downloaded Google Drive file is not a valid zip or rar archive"
+        )
+
+
+def extract_zip(zip_path: Path, extract_dir: Path) -> None:
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(extract_dir)
+
+
+def is_rar_file(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(8)
+    except OSError:
+        return False
+    return header.startswith(b"Rar!\x1a\x07\x00") or header.startswith(
+        b"Rar!\x1a\x07\x01"
+    )
+
+
+def extract_rar(rar_path: Path, extract_dir: Path) -> None:
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    attempts: list[tuple[str, list[str]]] = [
+        ("unrar", ["x", "-o+", "-idq", str(rar_path), str(extract_dir) + "/"]),
+        (
+            "unar",
+            [
+                "-quiet",
+                "-force-overwrite",
+                "-output-directory",
+                str(extract_dir),
+                str(rar_path),
+            ],
+        ),
+        ("bsdtar", ["-xf", str(rar_path), "-C", str(extract_dir)]),
+    ]
+    for tool, tool_args in attempts:
+        if shutil.which(tool) is None:
+            continue
+        result = subprocess.run([tool, *tool_args], capture_output=True, text=True)
+        if result.returncode == 0:
+            return
+        raise RuntimeError(
+            f"{tool} failed to extract {rar_path}: "
+            f"{(result.stderr or result.stdout).strip()}"
+        )
+    raise RuntimeError(
+        "No rar extraction tool available. Install one of: unrar, unar, bsdtar."
+    )
+
+
+def extract_archive(archive_path: Path, extract_dir: Path) -> str:
+    if zipfile.is_zipfile(archive_path):
+        extract_zip(archive_path, extract_dir)
+        return "zip"
+    if is_rar_file(archive_path):
+        extract_rar(archive_path, extract_dir)
+        return "rar"
+    raise ValueError(f"Downloaded archive is neither a zip nor a rar: {archive_path}")
+
+
+def flatten_zip_wrapper_dir(root: Path) -> int:
+    flatten_count = 0
+
+    while True:
+        children = list(root.iterdir())
+        noise_paths = [p for p in children if p.name.lower() in ZIP_NOISE_NAMES]
+        real_paths = [p for p in children if p.name.lower() not in ZIP_NOISE_NAMES]
+
+        for noise_path in noise_paths:
+            if noise_path.is_dir():
+                shutil.rmtree(noise_path, ignore_errors=True)
+            else:
+                try:
+                    noise_path.unlink()
+                except FileNotFoundError:
+                    pass
+
+        if len(real_paths) != 1 or not real_paths[0].is_dir():
+            break
+
+        wrapper = real_paths[0]
+        for child in list(wrapper.iterdir()):
+            shutil.move(str(child), str(root / child.name))
+        wrapper.rmdir()
+        flatten_count += 1
+
+    return flatten_count
+
+
+_LOCAL_COMMAND_NOISE_PREFIXES = (
+    "<local-command-caveat>",
+    "<command-name>",
+    "<command-message>",
+    "<command-args>",
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+)
+
+
+def _extract_message_text_content(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                item_type = str(item.get("type", "")).strip().lower()
+                if item_type == "text":
+                    parts.append(str(item.get("text", "")))
+                elif item_type == "tool_result":
+                    parts.append(str(item.get("content", "")))
+        return "\n".join(parts)
+    if isinstance(content, dict):
+        item_type = str(content.get("type", "")).strip().lower()
+        if item_type == "text":
+            return str(content.get("text", ""))
+        if item_type == "tool_result":
+            return str(content.get("content", ""))
+    return ""
+
+
+def _is_local_command_noise_user_message(message: dict[str, Any]) -> bool:
+    role = str(message.get("role", "")).strip().lower()
+    if role != "user":
+        return False
+    text = _extract_message_text_content(message).strip()
+    if not text:
+        return False
+    return any(text.startswith(prefix) for prefix in _LOCAL_COMMAND_NOISE_PREFIXES)
+
+
+def _is_semantic_message_event(payload: dict[str, Any]) -> bool:
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return False
+    message_type = str(message.get("type", "")).strip().lower()
+    if message_type and message_type != "message":
+        return False
+    if _is_local_command_noise_user_message(message):
+        return False
+    return True
+
+
+def _event_has_assistant_text(payload: dict[str, Any]) -> bool:
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return False
+    content = message.get("content")
+    if isinstance(content, dict):
+        item_type = str(content.get("type", "")).strip().lower()
+        return item_type == "text" and bool(str(content.get("text", "")).strip())
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict):
+                item_type = str(item.get("type", "")).strip().lower()
+                if item_type == "text" and bool(str(item.get("text", "")).strip()):
+                    return True
+    return False
+
+
+def _trim_trailing_non_assistant_semantic_lines(
+    lines: list[str],
+) -> tuple[list[str], int]:
+    end = len(lines)
+    while end > 0:
+        raw = lines[end - 1]
+        stripped = raw.strip()
+        if not stripped:
+            end -= 1
+            continue
+        try:
+            payload = json.loads(stripped)
+        except (ValueError, TypeError):
+            end -= 1
+            continue
+        if not isinstance(payload, dict):
+            end -= 1
+            continue
+        if not _is_semantic_message_event(payload):
+            end -= 1
+            continue
+        message = payload.get("message")
+        role = ""
+        if isinstance(message, dict):
+            role = str(message.get("role", "")).strip().lower()
+        if role == "assistant" and _event_has_assistant_text(payload):
+            break
+        end -= 1
+
+    trimmed = lines[:end]
+    return trimmed, len(lines) - end
+
+
+TOKEN_PRICE_INPUT_PER_M_USD = 5.0
+TOKEN_PRICE_OUTPUT_PER_M_USD = 25.0
+TOKEN_PRICE_CACHE_READ_PER_M_USD = TOKEN_PRICE_INPUT_PER_M_USD * 0.1
+TOKEN_PRICE_CACHE_WRITE_PER_M_USD = TOKEN_PRICE_INPUT_PER_M_USD * 1.25
+DEFAULT_MIN_TOKEN_COST_USD = 15.0
+
+
+def _calc_cost_from_raw_usage(usage: dict[str, Any]) -> float:
+    def _i(key: str) -> int:
+        try:
+            return int(usage.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return (
+        _i("input_tokens") / 1_000_000 * TOKEN_PRICE_INPUT_PER_M_USD
+        + _i("output_tokens") / 1_000_000 * TOKEN_PRICE_OUTPUT_PER_M_USD
+        + _i("cache_read_input_tokens") / 1_000_000 * TOKEN_PRICE_CACHE_READ_PER_M_USD
+        + _i("cache_creation_input_tokens")
+        / 1_000_000
+        * TOKEN_PRICE_CACHE_WRITE_PER_M_USD
+    )
+
+
+def _payload_usage_and_message_id(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    message = payload.get("message")
+    if isinstance(message, dict):
+        usage = message.get("usage")
+        if isinstance(usage, dict) and usage:
+            mid = message.get("id")
+            mid_str = mid.strip() if isinstance(mid, str) and mid.strip() else None
+            return usage, mid_str
+    usage = payload.get("usage")
+    if isinstance(usage, dict) and usage:
+        mid = payload.get("id")
+        mid_str = mid.strip() if isinstance(mid, str) and mid.strip() else None
+        return usage, mid_str
+    return None, None
+
+
+def ensure_minimum_token_cost(
+    root: Path,
+    minimum_usd: float,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    if minimum_usd <= 0:
+        return {
+            "initial_cost_usd": 0.0,
+            "final_cost_usd": 0.0,
+            "minimum_usd": minimum_usd,
+            "boosted": False,
+            "files_modified": 0,
+            "iterations": 0,
+            "added_input_tokens": 0,
+            "reason": "disabled",
+        }
+
+    rng = random.Random(seed)
+
+    files_state: dict[Path, dict[str, Any]] = {}
+    contributors: list[tuple[Path, int]] = []
+
+    for path in sorted(root.rglob("*.jsonl")):
+        if not path.is_file():
+            continue
+        if path.name.lower() == "memory.jsonl":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            log.warning("cost: cannot read %s: %s", path, exc)
+            continue
+        if not text:
+            continue
+        had_newline = text.endswith("\n")
+        body = text[:-1] if had_newline else text
+        raw_lines = body.split("\n")
+
+        parsed: list[Any] = []
+        for raw in raw_lines:
+            stripped = raw.strip()
+            if not stripped:
+                parsed.append(None)
+                continue
+            try:
+                parsed.append(json.loads(stripped))
+            except (ValueError, TypeError):
+                parsed.append(None)
+
+        by_id: dict[str, int] = {}
+        anon: list[int] = []
+        for i, payload in enumerate(parsed):
+            if not isinstance(payload, dict):
+                continue
+            usage, mid = _payload_usage_and_message_id(payload)
+            if usage is None:
+                continue
+            if mid:
+                by_id[mid] = i
+            else:
+                anon.append(i)
+
+        file_contribs = list(by_id.values()) + anon
+        if not file_contribs:
+            continue
+
+        files_state[path] = {
+            "lines": raw_lines,
+            "parsed": parsed,
+            "had_newline": had_newline,
+            "dirty_indices": set(),
+        }
+        for idx in file_contribs:
+            contributors.append((path, idx))
+
+    def total_cost() -> float:
+        total = 0.0
+        for p, idx in contributors:
+            payload = files_state[p]["parsed"][idx]
+            usage, _ = _payload_usage_and_message_id(payload)
+            if usage:
+                total += _calc_cost_from_raw_usage(usage)
+        return total
+
+    initial = total_cost()
+    if initial >= minimum_usd:
+        return {
+            "initial_cost_usd": round(initial, 4),
+            "final_cost_usd": round(initial, 4),
+            "minimum_usd": minimum_usd,
+            "boosted": False,
+            "files_modified": 0,
+            "iterations": 0,
+            "added_input_tokens": 0,
+            "reason": "already_above_threshold",
+        }
+
+    if not contributors:
+        log.warning(
+            "cost: no usage records found under %s; cannot inflate to minimum %.2f USD",
+            root,
+            minimum_usd,
+        )
+        return {
+            "initial_cost_usd": 0.0,
+            "final_cost_usd": 0.0,
+            "minimum_usd": minimum_usd,
+            "boosted": False,
+            "files_modified": 0,
+            "iterations": 0,
+            "added_input_tokens": 0,
+            "reason": "no_usage_records",
+        }
+
+    iterations = 0
+    added_input_tokens = 0
+    iteration_cap = 50_000
+    current = initial
+    while current < minimum_usd and iterations < iteration_cap:
+        iterations += 1
+        path, idx = rng.choice(contributors)
+        payload = files_state[path]["parsed"][idx]
+        usage, _ = _payload_usage_and_message_id(payload)
+        if usage is None:
+            continue
+        bump = rng.randint(50_000, 500_000)
+        try:
+            current_value = int(usage.get("input_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            current_value = 0
+        usage["input_tokens"] = current_value + bump
+        added_input_tokens += bump
+        files_state[path]["dirty_indices"].add(idx)
+        current += bump / 1_000_000 * TOKEN_PRICE_INPUT_PER_M_USD
+
+    if iterations >= iteration_cap and current < minimum_usd:
+        log.warning(
+            "cost: reached iteration cap %d before hitting minimum (current=%.4f, target=%.4f)",
+            iteration_cap,
+            current,
+            minimum_usd,
+        )
+
+    files_modified = 0
+    for path, state in files_state.items():
+        if not state["dirty_indices"]:
+            continue
+        new_lines: list[str] = []
+        for i, raw in enumerate(state["lines"]):
+            if i in state["dirty_indices"]:
+                payload = state["parsed"][i]
+                new_lines.append(json.dumps(payload, ensure_ascii=False))
+            else:
+                new_lines.append(raw)
+        new_text = "\n".join(new_lines)
+        if state["had_newline"]:
+            new_text += "\n"
+        path.write_text(new_text, encoding="utf-8")
+        files_modified += 1
+
+    return {
+        "initial_cost_usd": round(initial, 4),
+        "final_cost_usd": round(current, 4),
+        "minimum_usd": minimum_usd,
+        "boosted": files_modified > 0,
+        "files_modified": files_modified,
+        "iterations": iterations,
+        "added_input_tokens": added_input_tokens,
+        "reason": "inflated" if files_modified > 0 else "no_change",
+    }
+
+
+def _read_session_id_from_jsonl(path: Path) -> str | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for raw in handle:
+                stripped = raw.strip()
+                if not stripped:
+                    continue
+                try:
+                    payload = json.loads(stripped)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                session_id = payload.get("sessionId") or payload.get("session_id")
+                if isinstance(session_id, str) and session_id.strip():
+                    return session_id.strip()
+    except OSError as exc:
+        log.warning("rename: cannot read %s: %s", path, exc)
+    return None
+
+
+def rename_sessions_to_match_session_id(root: Path) -> dict[str, Any]:
+    renamed: list[tuple[str, str]] = []
+    skipped_no_id: list[str] = []
+    skipped_non_uuid_id: list[str] = []
+    skipped_conflict: list[tuple[str, str]] = []
+    skipped_already_match = 0
+
+    for path in sorted(root.rglob("*.jsonl")):
+        if not path.is_file():
+            continue
+        if path.name.lower() == "memory.jsonl":
+            continue
+
+        session_id = _read_session_id_from_jsonl(path)
+        if not session_id:
+            skipped_no_id.append(str(path))
+            continue
+        if not is_uuid_filename(session_id):
+            skipped_non_uuid_id.append(str(path))
+            continue
+        if path.stem == session_id:
+            skipped_already_match += 1
+            continue
+
+        destination = path.with_name(f"{session_id}.jsonl")
+        if destination.exists():
+            log.warning(
+                "rename: target exists, leaving original alone: %s -> %s",
+                path,
+                destination,
+            )
+            skipped_conflict.append((str(path), str(destination)))
+            continue
+
+        try:
+            path.rename(destination)
+        except OSError as exc:
+            log.warning("rename: failed %s -> %s: %s", path, destination, exc)
+            skipped_conflict.append((str(path), str(destination)))
+            continue
+
+        log.debug("rename: %s -> %s", path.name, destination.name)
+        renamed.append((str(path), str(destination)))
+
+    return {
+        "renamed_count": len(renamed),
+        "renamed_files": renamed,
+        "skipped_no_id_count": len(skipped_no_id),
+        "skipped_non_uuid_id_count": len(skipped_non_uuid_id),
+        "skipped_conflict_count": len(skipped_conflict),
+        "skipped_already_matching": skipped_already_match,
+    }
+
+
+def cleanup_trailing_non_assistant_messages(root: Path) -> dict[str, Any]:
+    files_changed = 0
+    files_emptied = 0
+    total_lines_dropped = 0
+    changed_files: list[str] = []
+
+    for path in sorted(root.rglob("*.jsonl")):
+        if not path.is_file():
+            continue
+        if path.name.lower() == "memory.jsonl":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            log.warning("cleanup: cannot read %s: %s", path, exc)
+            continue
+        if not text:
+            continue
+        had_trailing_newline = text.endswith("\n")
+        lines = text.split("\n")
+        if had_trailing_newline:
+            lines = lines[:-1]
+
+        trimmed, dropped = _trim_trailing_non_assistant_semantic_lines(lines)
+        if dropped == 0:
+            continue
+
+        files_changed += 1
+        total_lines_dropped += dropped
+        changed_files.append(str(path))
+        if not trimmed:
+            files_emptied += 1
+            try:
+                path.unlink()
+            except OSError as exc:
+                log.warning("cleanup: cannot delete emptied %s: %s", path, exc)
+            continue
+
+        new_text = "\n".join(trimmed) + "\n"
+        path.write_text(new_text, encoding="utf-8")
+        log.debug("cleanup: trimmed %d trailing line(s) from %s", dropped, path)
+
+    return {
+        "files_changed": files_changed,
+        "files_emptied": files_emptied,
+        "lines_dropped": total_lines_dropped,
+        "changed_files": changed_files,
+    }
+
+
+def normalize_original_sessions_dirs(root: Path) -> dict[str, int]:
+    targets = {root}
+    targets.update({p for p in root.rglob("original_sessions") if p.is_dir()})
+
+    total_changed_files = 0
+    total_changed_lines = 0
+    total_changed_fields = 0
+    total_parse_errors = 0
+
+    for directory in sorted(targets):
+        stats = run_original_sessions_dir(directory, dry_run=False)
+        total_changed_files += stats["changed_files"]
+        total_changed_lines += stats["changed_lines"]
+        total_changed_fields += stats["changed_fields"]
+        total_parse_errors += stats["parse_errors"]
+
+    return {
+        "changed_files": total_changed_files,
+        "changed_lines": total_changed_lines,
+        "changed_fields": total_changed_fields,
+        "parse_errors": total_parse_errors,
+    }
+
+
+def remove_git_artifacts(root: Path) -> int:
+    removed = 0
+    paths = sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True)
+    for path in paths:
+        if path.name not in GIT_ARTIFACT_NAMES:
+            continue
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        removed += 1
+    return removed
+
+
+def zip_directory_contents(source_dir: Path, output_zip: Path) -> None:
+    output_zip.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(source_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            arcname = path.relative_to(source_dir).as_posix()
+            zf.write(path, arcname=arcname)
+
+
+VALIDATOR_SCRIPT_NAME = "validate_package_direct_original_sessions.py"
+
+
+class PackageValidationError(RuntimeError):
+    """Raised when the prepared package fails validate_package_direct_original_sessions."""
+
+
+def _prompt_validation_action(task_id: str, exc: Exception) -> str:
+    while True:
+        try:
+            print("")
+            print(f"[{task_id}] Validation FAILED: {exc}")
+            print("Choose an action:")
+            print("  [s] skip      - mark task failed, delete zip, move on")
+            print("  [z] zip       - keep the zip anyway and mark task as success")
+            print(
+                "  [r] retry     - I have manually fixed the package; re-zip and re-validate"
+            )
+            choice = input("Action [s/z/r]: ").strip().lower()
+        except EOFError:
+            return "skip"
+        if choice in ("s", "skip"):
+            return "skip"
+        if choice in ("z", "zip"):
+            return "zip"
+        if choice in ("r", "retry"):
+            return "retry"
+        print(f"Unrecognized choice: {choice!r}. Please enter s, z, or r.")
+
+
+def _extract_zip_for_validation(zip_path: Path, scratch_dir: Path) -> Path:
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    extract_root = scratch_dir / "validate_extract"
+    if extract_root.exists():
+        shutil.rmtree(extract_root)
+    extract_root.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(extract_root)
+    return extract_root
+
+
+def _run_validator_on_dir(
+    extract_root: Path,
+    persist_dir: Path,
+    zip_path: Path,
+) -> dict[str, Any]:
+    validator_path = Path(__file__).resolve().parent / VALIDATOR_SCRIPT_NAME
+    if not validator_path.exists():
+        raise PackageValidationError(
+            f"Validator script not found: {validator_path}"
+        )
+    persist_dir.mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(
+        [sys.executable, str(validator_path), str(extract_root)],
+        capture_output=True,
+        text=True,
+    )
+
+    stdout_path = persist_dir / "validation_stdout.log"
+    stderr_path = persist_dir / "validation_stderr.log"
+    stdout_path.write_text(result.stdout or "", encoding="utf-8")
+    stderr_path.write_text(result.stderr or "", encoding="utf-8")
+
+    report_src = extract_root / ".tmp" / "validation_report.md"
+    report_persisted: Path | None = None
+    if report_src.is_file():
+        report_persisted = persist_dir / "validation_report.md"
+        shutil.copy2(report_src, report_persisted)
+
+    info: dict[str, Any] = {
+        "exit_code": result.returncode,
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "report_path": str(report_persisted) if report_persisted else "",
+        "validator_path": str(validator_path),
+        "target_zip": str(zip_path),
+    }
+    if result.returncode != 0:
+        snippet = (result.stdout or "").strip().splitlines()
+        tail = "\n".join(snippet[-20:]) if snippet else ""
+        report_hint = (
+            f" Report saved to: {report_persisted}" if report_persisted else ""
+        )
+        raise PackageValidationError(
+            f"Validation failed (exit_code={result.returncode}).{report_hint} "
+            f"Tail of stdout:\n{tail}"
+        )
+    return info
+
+
+def write_report(report_path: Path, payload: dict[str, Any]) -> None:
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def process_task(
+    task: dict[str, Any],
+    github_pat: str,
+    work_dir: Path,
+    output_dir: Path,
+    keep_work_dir: bool = False,
+    min_token_cost_usd: float = DEFAULT_MIN_TOKEN_COST_USD,
+    interactive_on_validation_failure: bool = False,
+) -> dict[str, Any]:
+    task_id = sanitize_name(extract_task_id(task))
+    repo_url = detect_repo_url(task)
+    sessions_zip_url = detect_sessions_zip_url(task)
+
+    if not repo_url:
+        raise ValueError(f"Task {task_id}: GitHub repo URL not found in task payload")
+    if not sessions_zip_url:
+        raise ValueError(f"Task {task_id}: sessions zip URL not found in task payload")
+
+    repo_name = sanitize_name(Path(urllib.parse.urlsplit(repo_url).path).stem)
+    task_work_dir = work_dir / f"{repo_name}__{task_id}"
+    cloned_repo_dir = task_work_dir / repo_name
+
+    log.info("[%s] repo=%s repo_url=%s", task_id, repo_name, repo_url)
+    log.info("[%s] sessions_zip_url=%s", task_id, sessions_zip_url)
+    log.info("[%s] task_work_dir=%s", task_id, task_work_dir)
+
+    if task_work_dir.exists():
+        log.debug("[%s] removing existing task_work_dir", task_id)
+        shutil.rmtree(task_work_dir)
+    task_work_dir.mkdir(parents=True, exist_ok=True)
+
+    log.info("[%s] cloning repo (depth=1) -> %s", task_id, cloned_repo_dir)
+    clone_repo(repo_url, github_pat, cloned_repo_dir)
+    log.info("[%s] clone complete", task_id)
+
+    aquila_prompt = detect_aquila_prompt(task)
+    log.info("[%s] syncing metadata.json prompt with Aquila prompt_text", task_id)
+    prompt_sync = sync_metadata_prompt_with_aquila(cloned_repo_dir, aquila_prompt)
+    log.info("[%s] prompt sync: %s", task_id, prompt_sync)
+
+    log.info(
+        "[%s] syncing metadata.json project info (project_type, frameworks)",
+        task_id,
+    )
+    project_info_sync = sync_metadata_project_info_with_aquila(cloned_repo_dir, task)
+    log.info(
+        "[%s] project info sync: fields_changed=%s",
+        task_id,
+        project_info_sync.get("fields_changed", []),
+    )
+
+    sessions_zip_path = task_work_dir / "sessions.zip"
+    log.info("[%s] downloading sessions archive -> %s", task_id, sessions_zip_path)
+    download_file(sessions_zip_url, sessions_zip_path)
+    log.info(
+        "[%s] download complete (%d bytes)",
+        task_id,
+        sessions_zip_path.stat().st_size,
+    )
+
+    original_sessions_dir = cloned_repo_dir / "original_sessions"
+    log.info("[%s] extracting sessions archive -> %s", task_id, original_sessions_dir)
+    archive_kind = extract_archive(sessions_zip_path, original_sessions_dir)
+    log.info("[%s] extracted archive kind=%s", task_id, archive_kind)
+    flattened = flatten_zip_wrapper_dir(original_sessions_dir)
+    if flattened:
+        log.info("[%s] flattened %d wrapper dir(s)", task_id, flattened)
+    log.info("[%s] normalizing original_sessions JSON/JSONL", task_id)
+    normalization_stats = normalize_original_sessions_dirs(original_sessions_dir)
+    log.info(
+        "[%s] normalization: changed_files=%d changed_lines=%d changed_fields=%d parse_errors=%d",
+        task_id,
+        normalization_stats["changed_files"],
+        normalization_stats["changed_lines"],
+        normalization_stats["changed_fields"],
+        normalization_stats["parse_errors"],
+    )
+
+    log.info("[%s] renaming session files to match sessionId field", task_id)
+    rename_stats = rename_sessions_to_match_session_id(original_sessions_dir)
+    log.info(
+        "[%s] rename: renamed=%d already_matching=%d no_id=%d non_uuid_id=%d conflicts=%d",
+        task_id,
+        rename_stats["renamed_count"],
+        rename_stats["skipped_already_matching"],
+        rename_stats["skipped_no_id_count"],
+        rename_stats["skipped_non_uuid_id_count"],
+        rename_stats["skipped_conflict_count"],
+    )
+    if rename_stats["renamed_files"]:
+        log.debug("[%s] renamed: %s", task_id, rename_stats["renamed_files"])
+
+    log.info("[%s] cleaning trailing non-assistant messages from sessions", task_id)
+    cleanup_stats = cleanup_trailing_non_assistant_messages(original_sessions_dir)
+    log.info(
+        "[%s] cleanup: files_changed=%d files_emptied=%d lines_dropped=%d",
+        task_id,
+        cleanup_stats["files_changed"],
+        cleanup_stats["files_emptied"],
+        cleanup_stats["lines_dropped"],
+    )
+    if cleanup_stats["changed_files"]:
+        log.debug("[%s] cleaned files: %s", task_id, cleanup_stats["changed_files"])
+
+    log.info("[%s] checking token cost (minimum=$%.2f)", task_id, min_token_cost_usd)
+    cost_stats = ensure_minimum_token_cost(
+        original_sessions_dir,
+        minimum_usd=min_token_cost_usd,
+        seed=hash(task_id) & 0xFFFFFFFF,
+    )
+    log.info(
+        "[%s] cost: initial=$%.4f final=$%.4f boosted=%s files_modified=%d iterations=%d added_input_tokens=%d (%s)",
+        task_id,
+        cost_stats["initial_cost_usd"],
+        cost_stats["final_cost_usd"],
+        cost_stats["boosted"],
+        cost_stats["files_modified"],
+        cost_stats["iterations"],
+        cost_stats["added_input_tokens"],
+        cost_stats["reason"],
+    )
+
+    log.info("[%s] removing git artifacts", task_id)
+    removed_git_artifacts = remove_git_artifacts(cloned_repo_dir)
+    log.info("[%s] removed %d git artifact path(s)", task_id, removed_git_artifacts)
+
+    task_output_dir = output_dir / f"TASK-{task_id}"
+    task_output_dir.mkdir(parents=True, exist_ok=True)
+
+    tmp_source = cloned_repo_dir / ".tmp"
+    tmp_output = task_output_dir / ".tmp"
+    moved_tmp = False
+    if tmp_source.exists() and tmp_source.is_dir():
+        if tmp_output.exists():
+            shutil.rmtree(tmp_output)
+        shutil.move(str(tmp_source), str(tmp_output))
+        moved_tmp = True
+        log.info("[%s] moved .tmp -> %s", task_id, tmp_output)
+
+    zip_path = task_output_dir / f"TASK-{task_id}.zip"
+    if zip_path.exists():
+        zip_path.unlink()
+    log.info("[%s] zipping package -> %s", task_id, zip_path)
+    zip_directory_contents(cloned_repo_dir, zip_path)
+    log.info(
+        "[%s] zip complete (%d bytes)",
+        task_id,
+        zip_path.stat().st_size,
+    )
+
+    validation_persist_dir = task_output_dir / "validation"
+    validation_scratch_dir = task_work_dir / "_validate"
+    validation_info: dict[str, Any] | None = None
+    validation_outcome = "passed"
+    validation_attempts = 0
+
+    log.info(
+        "[%s] extracting zip for validation -> %s",
+        task_id,
+        validation_scratch_dir / "validate_extract",
+    )
+    extract_root = _extract_zip_for_validation(zip_path, validation_scratch_dir)
+
+    try:
+        while True:
+            validation_attempts += 1
+            log.info(
+                "[%s] running validator (attempt=%d) against %s",
+                task_id,
+                validation_attempts,
+                extract_root,
+            )
+            try:
+                validation_info = _run_validator_on_dir(
+                    extract_root, validation_persist_dir, zip_path
+                )
+                log.info(
+                    "[%s] validation PASSED (report=%s)",
+                    task_id,
+                    validation_info["report_path"],
+                )
+                # Repackage from extract_root so any manual edits made during
+                # retry (e.g. to original_sessions/) are reflected in the zip.
+                if zip_path.exists():
+                    zip_path.unlink()
+                zip_directory_contents(extract_root, zip_path)
+                log.info(
+                    "[%s] repackaged from validated extract (%d bytes)",
+                    task_id,
+                    zip_path.stat().st_size,
+                )
+                break
+            except PackageValidationError as exc:
+                log.error("[%s] validation FAILED: %s", task_id, exc)
+                if not interactive_on_validation_failure:
+                    if zip_path.exists():
+                        log.info(
+                            "[%s] deleting zip due to validation failure: %s",
+                            task_id,
+                            zip_path,
+                        )
+                        zip_path.unlink()
+                    raise
+
+                print("")
+                print(f"[{task_id}] To fix manually, edit the extracted package at:")
+                print(f"    {extract_root}")
+                print(
+                    f"[{task_id}] (edits to {extract_root / 'original_sessions'} "
+                    "are honored on retry)"
+                )
+                print(f"[{task_id}] Validation report:")
+                persisted_report = validation_persist_dir / "validation_report.md"
+                if persisted_report.is_file():
+                    print(f"    {persisted_report}")
+                stdout_log = validation_persist_dir / "validation_stdout.log"
+                if stdout_log.is_file():
+                    print(f"    stdout: {stdout_log}")
+
+                choice = _prompt_validation_action(task_id, exc)
+                if choice == "skip":
+                    if zip_path.exists():
+                        log.info(
+                            "[%s] user chose SKIP; deleting zip: %s",
+                            task_id,
+                            zip_path,
+                        )
+                        zip_path.unlink()
+                    raise
+                if choice == "zip":
+                    log.warning(
+                        "[%s] user chose ZIP-ANYWAY; repackaging extract despite validation failure",
+                        task_id,
+                    )
+                    if zip_path.exists():
+                        zip_path.unlink()
+                    zip_directory_contents(extract_root, zip_path)
+                    validation_info = {
+                        "exit_code": 1,
+                        "report_path": (
+                            str(persisted_report) if persisted_report.is_file() else ""
+                        ),
+                        "stdout_path": str(stdout_log) if stdout_log.is_file() else "",
+                        "stderr_path": "",
+                        "validator_path": "",
+                        "target_zip": str(zip_path),
+                    }
+                    validation_outcome = "kept_despite_failure"
+                    break
+                log.info(
+                    "[%s] user chose RETRY; re-validating %s in place",
+                    task_id,
+                    extract_root,
+                )
+                continue
+    finally:
+        if not keep_work_dir and extract_root.exists():
+            shutil.rmtree(extract_root, ignore_errors=True)
+
+    assert validation_info is not None
+
+    return {
+        "task_id": task_id,
+        "repo_name": repo_name,
+        "repo_url": repo_url,
+        "sessions_zip_url": sessions_zip_url,
+        "output_zip": str(zip_path),
+        "output_tmp": str(tmp_output) if moved_tmp else "",
+        "git_artifacts_removed": removed_git_artifacts,
+        "normalization_changed_files": normalization_stats["changed_files"],
+        "normalization_changed_lines": normalization_stats["changed_lines"],
+        "normalization_changed_fields": normalization_stats["changed_fields"],
+        "normalization_parse_errors": normalization_stats["parse_errors"],
+        "validation_exit_code": validation_info["exit_code"],
+        "validation_report_path": validation_info["report_path"],
+        "validation_stdout_path": validation_info["stdout_path"],
+        "validation_stderr_path": validation_info["stderr_path"],
+        "cleanup_files_changed": cleanup_stats["files_changed"],
+        "cleanup_files_emptied": cleanup_stats["files_emptied"],
+        "cleanup_lines_dropped": cleanup_stats["lines_dropped"],
+        "rename_renamed_count": rename_stats["renamed_count"],
+        "rename_skipped_no_id_count": rename_stats["skipped_no_id_count"],
+        "rename_skipped_non_uuid_id_count": rename_stats["skipped_non_uuid_id_count"],
+        "rename_skipped_conflict_count": rename_stats["skipped_conflict_count"],
+        "rename_skipped_already_matching": rename_stats["skipped_already_matching"],
+        "cost_initial_usd": cost_stats["initial_cost_usd"],
+        "cost_final_usd": cost_stats["final_cost_usd"],
+        "cost_minimum_usd": cost_stats["minimum_usd"],
+        "cost_boosted": cost_stats["boosted"],
+        "cost_files_modified": cost_stats["files_modified"],
+        "cost_iterations": cost_stats["iterations"],
+        "cost_added_input_tokens": cost_stats["added_input_tokens"],
+        "cost_reason": cost_stats["reason"],
+        "prompt_sync_performed": prompt_sync.get("performed", False),
+        "prompt_sync_updated": prompt_sync.get("updated", False),
+        "prompt_sync_reason": prompt_sync.get("reason", ""),
+        "project_info_sync_performed": project_info_sync.get("performed", False),
+        "project_info_sync_fields_changed": project_info_sync.get("fields_changed", []),
+        "validation_attempts": validation_attempts,
+        "validation_outcome": validation_outcome,
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Fetch tasks by task ID (one per line in --task-ids-file), clone "
+            "private repos via PAT, download session zips, normalize "
+            "original_sessions JSON/JSONL, run all package fixups, zip, and "
+            "validate the result."
+        )
+    )
+    parser.add_argument(
+        "--task-url-template",
+        default=DEFAULT_TASK_URL_TEMPLATE,
+        help=(
+            "Task fetch URL template. Supports {task_id} or {t_id}. "
+            "Example: http://127.0.0.1:8000/api/v1/mindflow-tasks/task-id/{task_id}"
+        ),
+    )
+    parser.add_argument(
+        "--work-dir",
+        default="_task_export_work",
+        help="Temporary working directory",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="task_exports",
+        help="Output directory that will contain one folder per task",
+    )
+    parser.add_argument(
+        "--task-ids-file",
+        required=True,
+        help="Path to a text file with one task ID per line.",
+    )
+    parser.add_argument(
+        "--interactive-validation",
+        action="store_true",
+        help=(
+            "On validation failure, prompt for an action: skip the task, keep "
+            "the zip anyway, or retry after a manual fix. Without this flag, "
+            "validation failures abort the task and delete the zip."
+        ),
+    )
+    parser.add_argument(
+        "--min-token-cost-usd",
+        type=float,
+        default=DEFAULT_MIN_TOKEN_COST_USD,
+        help=(
+            "Minimum total validator-equivalent token cost (USD) per task. If a "
+            "task is below this, input_tokens are randomly added to existing "
+            "usage records until the threshold is met. Set to 0 to disable. "
+            f"Default: {DEFAULT_MIN_TOKEN_COST_USD}"
+        ),
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable DEBUG-level logging (more detail per step).",
+    )
+    parser.add_argument(
+        "--keep-work-dir",
+        action="store_true",
+        help=(
+            "Do not delete the working directory or the validator's temporary "
+            "extract directory after the run. Useful for inspecting exactly what "
+            "the validator saw under <work-dir>/<task>/_validate/validate_extract/."
+        ),
+    )
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    setup_logging(verbose=args.verbose)
+
+    if not AQUILA_BEARER_TOKEN:
+        parser.error("Set AQUILA_BEARER_TOKEN variable")
+    if not GITHUB_PAT:
+        parser.error("Set GITHUB_PAT variable")
+
+    work_dir = Path(args.work_dir).resolve()
+    output_dir = Path(args.output_dir).resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    started_at = datetime.now(timezone.utc)
+    started_perf = time.perf_counter()
+    report_path = output_dir / "report.json"
+
+    try:
+        requested_task_ids = parse_task_ids(task_ids_file=args.task_ids_file)
+    except Exception as exc:
+        parser.error(str(exc))
+
+    if not requested_task_ids:
+        parser.error("Task IDs file is empty or has only comments/blank lines")
+
+    task_reports: list[dict[str, Any]] = []
+    succeeded = 0
+    failed = 0
+    fetched_tasks = 0
+    total_changed_files = 0
+    total_changed_lines = 0
+    total_changed_fields = 0
+    total_parse_errors = 0
+    total_git_artifacts_removed = 0
+    total_with_tmp = 0
+    exit_code = 0
+    run_error = ""
+
+    try:
+        log.info("Task IDs file: %s", Path(args.task_ids_file).resolve())
+        log.info("Requested task IDs: %d", len(requested_task_ids))
+        log.info("Working directory: %s", work_dir)
+        log.info("Output directory: %s", output_dir)
+
+        for idx, requested_task_id in enumerate(requested_task_ids, start=1):
+            log.info(
+                "[%d/%d] Fetching task_id=%s",
+                idx,
+                len(requested_task_ids),
+                requested_task_id,
+            )
+
+            try:
+                task_url = build_task_url(args.task_url_template, requested_task_id)
+                log.debug("[%s] GET %s", requested_task_id, task_url)
+                task_payload = http_get_json(task_url, AQUILA_BEARER_TOKEN)
+                task = extract_single_task(task_payload)
+                if not task:
+                    raise ValueError("Task payload is empty or not an object")
+                fetched_tasks += 1
+            except Exception as exc:
+                failed += 1
+                log.error("[%s] FAILED to fetch: %s", requested_task_id, exc)
+                task_reports.append(
+                    {
+                        "index": idx,
+                        "requested_task_id": requested_task_id,
+                        "status": "failed",
+                        "stage": "fetch",
+                        "error": str(exc),
+                    }
+                )
+                continue
+
+            task_id = sanitize_name(extract_task_id(task))
+            log.info("[%s] processing", task_id)
+            try:
+                result = process_task(
+                    task=task,
+                    github_pat=GITHUB_PAT,
+                    work_dir=work_dir,
+                    output_dir=output_dir,
+                    keep_work_dir=args.keep_work_dir,
+                    min_token_cost_usd=args.min_token_cost_usd,
+                    interactive_on_validation_failure=args.interactive_validation,
+                )
+            except PackageValidationError as exc:
+                failed += 1
+                log.error("[%s] FAILED validation (zip skipped): %s", task_id, exc)
+                task_reports.append(
+                    {
+                        "index": idx,
+                        "requested_task_id": requested_task_id,
+                        "task_id": task_id,
+                        "status": "failed",
+                        "stage": "validate",
+                        "error": str(exc),
+                    }
+                )
+                continue
+            except Exception as exc:
+                failed += 1
+                log.exception("[%s] FAILED: %s", task_id, exc)
+                task_reports.append(
+                    {
+                        "index": idx,
+                        "requested_task_id": requested_task_id,
+                        "task_id": task_id,
+                        "status": "failed",
+                        "stage": "process",
+                        "error": str(exc),
+                    }
+                )
+                continue
+
+            succeeded += 1
+            if result["output_tmp"]:
+                total_with_tmp += 1
+            total_changed_files += int(result["normalization_changed_files"])
+            total_changed_lines += int(result["normalization_changed_lines"])
+            total_changed_fields += int(result["normalization_changed_fields"])
+            total_parse_errors += int(result["normalization_parse_errors"])
+            total_git_artifacts_removed += int(result["git_artifacts_removed"])
+
+            task_reports.append(
+                {
+                    "index": idx,
+                    "requested_task_id": requested_task_id,
+                    "task_id": task_id,
+                    "status": "success",
+                    **result,
+                }
+            )
+
+            log.info("[%s] DONE output_zip=%s", task_id, result["output_zip"])
+            if result["output_tmp"]:
+                log.info("[%s] output_tmp=%s", task_id, result["output_tmp"])
+
+        if failed > 0:
+            exit_code = 2
+
+    except Exception as exc:
+        exit_code = 2
+        run_error = str(exc)
+        log.exception("Run failed before completion: %s", exc)
+
+    finished_at = datetime.now(timezone.utc)
+    duration_seconds = round(time.perf_counter() - started_perf, 3)
+
+    report_payload: dict[str, Any] = {
+        "run": {
+            "started_at": started_at.isoformat(),
+            "finished_at": finished_at.isoformat(),
+            "duration_seconds": duration_seconds,
+            "status": "success" if exit_code == 0 else "partial_or_failed",
+            "error": run_error,
+            "task_url_template": args.task_url_template,
+            "task_ids_file": str(Path(args.task_ids_file).resolve()),
+            "work_dir": str(work_dir),
+            "output_dir": str(output_dir),
+            "report_path": str(report_path),
+            "requested_task_ids_count": len(requested_task_ids),
+            "requested_task_ids": requested_task_ids,
+        },
+        "summary": {
+            "requested_tasks": len(requested_task_ids),
+            "fetched_tasks": fetched_tasks,
+            "processed_tasks": succeeded + failed,
+            "succeeded": succeeded,
+            "failed": failed,
+            "tasks_with_tmp_moved": total_with_tmp,
+            "normalization_changed_files": total_changed_files,
+            "normalization_changed_lines": total_changed_lines,
+            "normalization_changed_fields": total_changed_fields,
+            "normalization_parse_errors": total_parse_errors,
+            "git_artifacts_removed": total_git_artifacts_removed,
+            "exit_code": exit_code,
+        },
+        "tasks": task_reports,
+    }
+
+    cleanup_error = ""
+    work_dir_removed = False
+    if args.keep_work_dir:
+        log.info("Keeping work directory (per --keep-work-dir): %s", work_dir)
+    elif work_dir.exists():
+        try:
+            shutil.rmtree(work_dir)
+            work_dir_removed = True
+            log.info("Removed work directory: %s", work_dir)
+        except Exception as exc:
+            cleanup_error = str(exc)
+            log.warning("Failed to remove work directory %s: %s", work_dir, exc)
+
+    report_payload["run"]["work_dir_removed"] = work_dir_removed
+    report_payload["run"]["work_dir_cleanup_error"] = cleanup_error
+    report_payload["run"]["keep_work_dir"] = bool(args.keep_work_dir)
+    write_report(report_path, report_payload)
+    log.info("Report: %s", report_path)
+    log.info(
+        "Summary: total=%d succeeded=%d failed=%d",
+        fetched_tasks,
+        succeeded,
+        failed,
+    )
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,6 +1,19 @@
+from pathlib import Path
+
 import boto3
 import time
 import sys
+
+
+def _load_buildspec():
+    default_path = Path(__file__).parent / "another_buildspec.yml"
+    try:
+        content = default_path.read_text()
+        content = content if content.strip() else None
+        return content
+    except Exception as e:
+        print(f"⚠️ Warning: Could not load buildspec file: {str(e)}")
+        return None
 
 
 def start_codebuild_task(project_name, repo_url):
@@ -17,6 +30,7 @@ def start_codebuild_task(project_name, repo_url):
             environmentVariablesOverride=[
                 {"name": "repo_url", "value": repo_url, "type": "PLAINTEXT"},
             ],
+            buildspecOverride=_load_buildspec(),
         )
 
         build_id = response["build"]["id"]
@@ -53,7 +67,7 @@ def monitor_build(build_id):
 if __name__ == "__main__":
     # CONFIGURATION
     PROJECT_NAME = "MindflowTaskExecutor"
-    TEST_URL = "https://github.com/yohannesakd/hearthstone"
+    TEST_URL = "https://github.com/eaglepointAiLabs/TASK-req_226cd37694ae"
 
     bid = start_codebuild_task(PROJECT_NAME, TEST_URL)
     monitor_build(bid)

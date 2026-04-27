@@ -1,0 +1,93 @@
+version: 0.2
+
+env:
+  variables:
+    CLONE_DIR: "project_bundle"
+    TARGET_DIR: "project_bundle/repo"
+  secrets-manager:
+    DOCKER_USER: "dockerhub/creds:username"
+    DOCKER_TOKEN: "dockerhub/creds:password"
+    GITHUB_PAT: "github/pat:token"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - echo "=== INSTALL PHASE ==="
+      - |
+        set +e
+        echo "==================== DOCKER ===================="
+        docker --version
+        docker info
+
+  pre_build:
+    commands:
+      - |
+        set +e
+
+        echo "==================== GIT CLONE ===================="
+        if [ -n "${GITHUB_PAT:-}" ]; then
+          git config --global url."https://${GITHUB_PAT}@github.com/".insteadOf "https://github.com/"
+        fi
+
+        git clone "${repo_url}" "$CLONE_DIR"
+
+        echo "$(pwd)/$TARGET_DIR" > /tmp/build_dir
+
+  build:
+    commands:
+      - |
+        set +e
+
+
+        cd "$(cat /tmp/build_dir)"
+
+        echo "\n==================== DOCKER SETUP ===================="
+        echo "$DOCKER_TOKEN" | docker login --username "$DOCKER_USER" --password-stdin
+
+        if docker compose version >/dev/null 2>&1; then
+          COMPOSE_CMD="docker compose"
+        elif command -v docker-compose >/dev/null 2>&1; then
+          COMPOSE_CMD="docker-compose"
+        else
+          echo "Docker Compose is not installed"
+        fi
+
+        $COMPOSE_CMD up -d
+
+        echo "\n==================== TEST SUITE ===================="
+        $COMPOSE_CMD stop
+        TEST_SCRIPT=""
+        [ -f "run_tests.sh" ] && TEST_SCRIPT="run_tests.sh"
+        [ -f "run_test.sh" ] && [ -z "$TEST_SCRIPT" ] && TEST_SCRIPT="run_test.sh"
+
+        if [ -n "$TEST_SCRIPT" ]; then
+          chmod +x "$TEST_SCRIPT"
+          ./"$TEST_SCRIPT"
+        else
+          echo "No test script found"
+        fi
+
+  post_build:
+    commands:
+      - |
+        set -e
+        echo "\n==================== POST-BUILD CLEANUP ===================="
+        if [ -f /tmp/build_dir ]; then cd "$(cat /tmp/build_dir)"; fi
+
+        if docker compose version >/dev/null 2>&1; then
+          COMPOSE_CMD="docker compose"
+        elif command -v docker-compose >/dev/null 2>&1; then
+          COMPOSE_CMD="docker-compose"
+        else
+          COMPOSE_CMD=""
+        fi
+
+        if [ -n "$COMPOSE_CMD" ]; then
+          echo "\n--- Docker Service Logs ---"
+          $COMPOSE_CMD logs --no-color
+          $COMPOSE_CMD down
+        fi
+
+        echo "\nBuild process finished at $(date)"
