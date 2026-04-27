@@ -6,7 +6,6 @@ env:
     CLONE_DIR: "project_bundle"
     TARGET_DIR: "project_bundle/repo"
     COMBINED_LOG: "/tmp/build-execution.log"
-    MINDFLOW_TASK_API_BASE_URL: "https://dev.aquila-core.net/api/v1/mindflow-tasks"
   secrets-manager:
     DOCKER_USER: "dockerhub/creds:username"
     DOCKER_TOKEN: "dockerhub/creds:password"
@@ -61,44 +60,9 @@ phases:
         fi
 
         echo "\n==================== VALIDATOR OUTPUT ====================" >> "$COMBINED_LOG"
-        VALIDATOR_SCRIPT="validator.py"
-        API_BASE_URL="${MINDFLOW_TASK_API_BASE_URL:-}"
-
-        if [ -n "$API_BASE_URL" ]; then
-          CLEAN_API_BASE_URL="$(echo "$API_BASE_URL" | sed 's#/*$##')"
-          if [ -n "${repo_url:-}" ]; then
-            LOOKUP_URL="$CLEAN_API_BASE_URL/batch/by-github-url"
-            API_RESPONSE="$(curl -sS --connect-timeout 5 --max-time 20 --get --data-urlencode "github_url=${repo_url}" "$LOOKUP_URL" 2>>"$COMBINED_LOG")"
-            CURL_EXIT_CODE=$?
-
-            if [ $CURL_EXIT_CODE -eq 0 ] && [ -n "$API_RESPONSE" ]; then
-              BATCH_NO="$(printf '%s' "$API_RESPONSE" | sed -n 's/.*"batch_no"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-
-              BATCH_NO_NORMALIZED="$(echo "$BATCH_NO" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-              if [ "$BATCH_NO_NORMALIZED" = "1" ] || [ "$BATCH_NO_NORMALIZED" = "week1" ] || [ "$BATCH_NO_NORMALIZED" = "week-1" ] || [ "$BATCH_NO_NORMALIZED" = "w1" ]; then
-                VALIDATOR_SCRIPT="week_1_validator.py"
-                echo "[INFO] Batch lookup identified Week 1 task (batch_no=$BATCH_NO). Using $VALIDATOR_SCRIPT" >> "$COMBINED_LOG"
-              else
-                echo "[INFO] Batch lookup did not identify Week 1 (batch_no=$BATCH_NO). Using validator.py" >> "$COMBINED_LOG"
-              fi
-            else
-              echo "[WARN] Batch lookup API call failed. Falling back to validator.py" >> "$COMBINED_LOG"
-            fi
-          else
-            echo "[WARN] repo_url was empty. Falling back to validator.py" >> "$COMBINED_LOG"
-          fi
-        else
-          echo "[INFO] MINDFLOW_TASK_API_BASE_URL not set. Using validator.py" >> "$COMBINED_LOG"
+        if ! python3 validator.py >> "$COMBINED_LOG" 2>&1; then
+          fail_and_upload "Folder validation failed"
         fi
-
-        if ! python3 "$VALIDATOR_SCRIPT" >> "$COMBINED_LOG" 2>&1; then
-          fail_and_upload "$VALIDATOR_SCRIPT failed"
-        fi
-
-        # echo "\n==================== TRAJECTORY VALIDATION ====================" >> "$COMBINED_LOG"
-        # if ! python3 trajectory_validator.py "$CLONE_DIR/sessions" --batch >> "$COMBINED_LOG" 2>&1; then
-        #   fail_and_upload "Trajectory validation failed (High Risk detected)"
-        # fi
 
         echo "$(pwd)/$TARGET_DIR" > /tmp/build_dir
 
