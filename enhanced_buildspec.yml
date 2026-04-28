@@ -6,7 +6,7 @@ env:
     CLONE_DIR: "project_bundle"
     TARGET_DIR: "project_bundle/repo"
     COMBINED_LOG: "/tmp/build-execution.log"
-    AQUILA_TASK_API_URL: "https://api.aquila-core.net/api/v1/mindflow-tasks/{task_id}"
+    AQUILA_TASK_API_URL: "https://api.aquila-core.net/api/v1/mindflow-tasks/mindflow-id/{task_id}"
   secrets-manager:
     DOCKER_USER: "dockerhub/creds:username"
     DOCKER_TOKEN: "dockerhub/creds:password"
@@ -67,8 +67,8 @@ phases:
           git config --global url."https://${GITHUB_PAT}@github.com/".insteadOf "https://github.com/"
         fi
 
-        if ! python3 validator.py --prepare-ci >> "$COMBINED_LOG" 2>&1; then
-          fail_and_upload "validator.py CI preparation or validation failed"
+        if ! python3 enhanced_validator.py --prepare-ci >> "$COMBINED_LOG" 2>&1; then
+          fail_and_upload "enhanced_validator.py CI preparation or validation failed"
         fi
 
   build:
