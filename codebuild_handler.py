@@ -6,7 +6,7 @@ import sys
 
 
 def _load_buildspec():
-    default_path = Path(__file__).parent / "another_buildspec.yml"
+    default_path = Path(__file__).parent / "enhanced_buildspec.yml"
     try:
         content = default_path.read_text()
         content = content if content.strip() else None
@@ -16,7 +16,7 @@ def _load_buildspec():
         return None
 
 
-def start_codebuild_task(project_name, repo_url):
+def start_codebuild_task(project_name, task_id, aquila_token):
     # Initialize the CodeBuild client
     # Ensure your AWS CLI is configured or env vars are set
     cb = boto3.client("codebuild")
@@ -28,7 +28,17 @@ def start_codebuild_task(project_name, repo_url):
         response = cb.start_build(
             projectName=project_name,
             environmentVariablesOverride=[
-                {"name": "repo_url", "value": repo_url, "type": "PLAINTEXT"},
+                {
+                    "name": "REPORT_PREFIX",
+                    "value": "mindflow-task-reports",
+                    "type": "PLAINTEXT",
+                },
+                {"name": "TASK_ID", "value": task_id, "type": "PLAINTEXT"},
+                {
+                    "name": "AQUILA_ACCESS_TOKEN",
+                    "value": aquila_token,
+                    "type": "PLAINTEXT",
+                },
             ],
             buildspecOverride=_load_buildspec(),
         )
@@ -67,7 +77,8 @@ def monitor_build(build_id):
 if __name__ == "__main__":
     # CONFIGURATION
     PROJECT_NAME = "MindflowTaskExecutor"
-    TEST_URL = "https://github.com/eaglepointAiLabs/TASK-req_226cd37694ae"
+    TASK_ID = "req_3a63e30d3771"
+    AQUILA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI5MGQ2NGQ1YS0zZDg2LTRjOTQtOWNjMS1kYjY3MTI1NTc3NzAiLCJleHAiOjE3NzczNjI2MzB9.vLzr3u2Vlo89_IKNHyHf5BpB0m23YgDjHp-HEhgTzCk"
 
-    bid = start_codebuild_task(PROJECT_NAME, TEST_URL)
+    bid = start_codebuild_task(PROJECT_NAME, TASK_ID, AQUILA_TOKEN)
     monitor_build(bid)

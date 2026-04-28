@@ -1414,6 +1414,96 @@ def normalize_api_spec_filename(repo_dir: Path) -> dict[str, Any]:
     }
 
 
+UNNECESSARY_PATH_NAMES = {
+    # Virtualenvs
+    "venv", ".venv", "env",
+    # JS / Python deps + caches
+    "node_modules",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    # IDE / editor state
+    ".idea", ".vscode",
+    # Build / framework caches
+    "dist", "build", ".next", ".nuxt", ".cache", ".turbo", ".parcel-cache",
+    # Coverage / test artifacts
+    "coverage", ".nyc_output", "htmlcov",
+    # OS noise
+    ".DS_Store",
+}
+
+REPO_FORBIDDEN_SUBDIR_NAMES = {
+    ".tmp", "tmp", "temp", "_tmp",
+    "docs", "doc", "documentation",
+}
+
+
+class RepoCleanlinessError(ValueError):
+    """Raised when the cloned repo contains paths that shouldn't ship."""
+
+
+def find_unnecessary_paths(repo_dir: Path) -> list[Path]:
+    """Recursively scan repo_dir for files/dirs that should not ship.
+    Catches dotenv files (.env, .env.*) at any depth, build artifacts, IDE
+    configs, virtualenvs, node_modules, etc.
+    """
+    found: list[Path] = []
+    for path in sorted(repo_dir.rglob("*")):
+        name = path.name
+        if path.is_file() and (name == ".env" or name.startswith(".env.")):
+            found.append(path)
+            continue
+        if name in UNNECESSARY_PATH_NAMES:
+            found.append(path)
+    return found
+
+
+def find_forbidden_repo_subdirs(repo_dir: Path) -> list[Path]:
+    """Flag tmp/docs-like directories anywhere underneath a `repo/` subfolder.
+    The cloned repo root is intentionally NOT checked -- a `.tmp/` there is
+    expected (it gets moved aside before zipping).
+    """
+    repo_subdir = repo_dir / "repo"
+    if not repo_subdir.is_dir():
+        return []
+    found: list[Path] = []
+    for path in sorted(repo_subdir.rglob("*")):
+        if not path.is_dir():
+            continue
+        if path.name.lower() in REPO_FORBIDDEN_SUBDIR_NAMES:
+            found.append(path)
+    return found
+
+
+def assert_repo_clean(repo_dir: Path) -> dict[str, Any]:
+    """Raise RepoCleanlinessError if the cloned repo contains unwanted paths.
+    Returns counts when clean (always 0/0).
+    """
+    issues: list[str] = []
+
+    unnecessary = find_unnecessary_paths(repo_dir)
+    for path in unnecessary:
+        rel = path.relative_to(repo_dir).as_posix()
+        kind = "dir" if path.is_dir() else "file"
+        issues.append(f"unnecessary {kind} (anywhere): {rel}")
+
+    forbidden = find_forbidden_repo_subdirs(repo_dir)
+    for path in forbidden:
+        rel = path.relative_to(repo_dir).as_posix()
+        issues.append(f"forbidden subdir at repo root or under repo/: {rel}")
+
+    if issues:
+        message = (
+            "Repo cleanliness check failed -- the cloned repo contains paths "
+            "that should not ship in the delivery package:\n  - "
+            + "\n  - ".join(issues)
+        )
+        raise RepoCleanlinessError(message)
+
+    return {
+        "unnecessary_paths_found": 0,
+        "forbidden_repo_subdirs_found": 0,
+    }
+
+
 def remove_git_artifacts(root: Path) -> int:
     removed = 0
     paths = sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True)
@@ -1787,6 +1877,13 @@ def process_task(
     log.info("[%s] removing git artifacts", task_id)
     removed_git_artifacts = remove_git_artifacts(cloned_repo_dir)
     log.info("[%s] removed %d git artifact path(s)", task_id, removed_git_artifacts)
+
+    # Cleanliness check runs before .tmp/ is moved aside. The forbidden-
+    # subdir check intentionally only looks under a `repo/` subfolder, so a
+    # `.tmp/` at the cloned root is fine.
+    log.info("[%s] checking repo cleanliness", task_id)
+    assert_repo_clean(cloned_repo_dir)
+    log.info("[%s] repo cleanliness OK", task_id)
 
     task_output_dir = output_dir / f"TASK-{task_id}"
     task_output_dir.mkdir(parents=True, exist_ok=True)

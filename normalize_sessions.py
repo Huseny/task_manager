@@ -44,7 +44,16 @@ PROVIDER_KEYS = {
 
 OPENAI_MODEL = "gpt-5.4"
 ANTHROPIC_MODEL = "claude-opus-4-6"
+ANTHROPIC_MODEL_NEW = "claude-opus-4-7"
 DISPLAY_OPUS_MODEL = "Opus 4.6"
+DISPLAY_OPUS_MODEL_NEW = "Opus 4.7"
+OPUS_MODEL_CUTOFF = datetime(2026, 4, 16, tzinfo=timezone.utc)
+
+
+def select_anthropic_model(timestamp: datetime | None) -> tuple[str, str]:
+    if timestamp is not None and timestamp >= OPUS_MODEL_CUTOFF:
+        return ANTHROPIC_MODEL_NEW, DISPLAY_OPUS_MODEL_NEW
+    return ANTHROPIC_MODEL, DISPLAY_OPUS_MODEL
 
 
 class ProcessFileResult(TypedDict):
@@ -182,6 +191,25 @@ def extract_conversation_turns(
         )
 
     return turns, parse_errors
+
+
+def find_earliest_timestamp_in_payload(data: Any) -> datetime | None:
+    earliest: datetime | None = None
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key == "timestamp":
+                ts = parse_iso_timestamp(value)
+                if ts is not None and (earliest is None or ts < earliest):
+                    earliest = ts
+            nested = find_earliest_timestamp_in_payload(value)
+            if nested is not None and (earliest is None or nested < earliest):
+                earliest = nested
+    elif isinstance(data, list):
+        for item in data:
+            nested = find_earliest_timestamp_in_payload(item)
+            if nested is not None and (earliest is None or nested < earliest):
+                earliest = nested
+    return earliest
 
 
 def get_earliest_timestamp_in_session_file(path: Path) -> datetime | None:
@@ -334,13 +362,16 @@ def infer_provider_from_model(value: str | None) -> str | None:
     return None
 
 
-def normalize_model_change_text(value: str) -> tuple[str, int]:
+def normalize_model_change_text(
+    value: str, session_timestamp: "datetime | None" = None
+) -> tuple[str, int]:
     updated = value
+    _, display_model = select_anthropic_model(session_timestamp)
 
     # Normalize CLI stdout model-switch marker payloads.
     updated = re.sub(
         r"(?is)(<local-command-stdout>\s*set\s+model\s+to\s*)(.*?)(</local-command-stdout>)",
-        lambda m: f"{m.group(1)}\u001b[1m{DISPLAY_OPUS_MODEL}\u001b[22m{m.group(3)}",
+        lambda m: f"{m.group(1)}\u001b[1m{display_model}\u001b[22m{m.group(3)}",
         updated,
     )
 
@@ -349,7 +380,9 @@ def normalize_model_change_text(value: str) -> tuple[str, int]:
 
 
 def rewrite_models_by_provider(
-    data: Any, inherited_provider: str | None = None
+    data: Any,
+    inherited_provider: str | None = None,
+    session_timestamp: "datetime | None" = None,
 ) -> tuple[Any, int]:
     changed = 0
 
@@ -393,14 +426,15 @@ def rewrite_models_by_provider(
                     changed += 1
                     data[key] = OPENAI_MODEL
         elif effective_provider == "anthropic":
+            anthropic_model, _ = select_anthropic_model(session_timestamp)
             for key in model_fields:
-                if data[key] != ANTHROPIC_MODEL:
-                    data[key] = ANTHROPIC_MODEL
+                if data[key] != anthropic_model:
+                    data[key] = anthropic_model
                     changed += 1
 
         for key, value in data.items():
             new_value, nested_changed = rewrite_models_by_provider(
-                value, effective_provider
+                value, effective_provider, session_timestamp
             )
             data[key] = new_value
             changed += nested_changed
@@ -409,14 +443,14 @@ def rewrite_models_by_provider(
     if isinstance(data, list):
         for idx, item in enumerate(data):
             new_item, nested_changed = rewrite_models_by_provider(
-                item, inherited_provider
+                item, inherited_provider, session_timestamp
             )
             data[idx] = new_item
             changed += nested_changed
         return data, changed
 
     if isinstance(data, str):
-        return normalize_model_change_text(data)
+        return normalize_model_change_text(data, session_timestamp)
 
     return data, 0
 
@@ -424,6 +458,7 @@ def rewrite_models_by_provider(
 def process_jsonl_file(path: Path, dry_run: bool) -> ProcessFileResult:
     raw_text = path.read_text(encoding="utf-8", errors="replace")
     lines = raw_text.splitlines()
+    session_timestamp = get_earliest_timestamp_in_session_file(path)
 
     out_lines: list[str] = []
     changed_lines = 0
@@ -443,7 +478,14 @@ def process_jsonl_file(path: Path, dry_run: bool) -> ProcessFileResult:
             out_lines.append(line)
             continue
 
-        updated_payload, changed = rewrite_models_by_provider(payload)
+        line_timestamp = (
+            parse_iso_timestamp(payload.get("timestamp"))
+            if isinstance(payload, dict)
+            else None
+        ) or session_timestamp
+        updated_payload, changed = rewrite_models_by_provider(
+            payload, session_timestamp=line_timestamp
+        )
         changed_fields += changed
         if changed > 0:
             changed_lines += 1
@@ -483,7 +525,10 @@ def process_json_file(path: Path, dry_run: bool) -> ProcessFileResult:
             "details": details,
         }
 
-    updated_payload, changed = rewrite_models_by_provider(payload)
+    session_timestamp = find_earliest_timestamp_in_payload(payload)
+    updated_payload, changed = rewrite_models_by_provider(
+        payload, session_timestamp=session_timestamp
+    )
     if changed > 0:
         if dry_run:
             details.append(f"{path}: fields_changed={changed}")

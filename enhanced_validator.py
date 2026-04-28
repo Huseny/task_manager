@@ -1162,7 +1162,7 @@ class AquilaAlignmentValidator(SectionValidator):
 # Report writer
 # ---------------------------------------------------------------------------
 
-def write_report(report_path: Path, sections: list[CheckSection]) -> None:
+def render_report(sections: list[CheckSection]) -> str:
     lines = ["# Validation Report", ""]
     for section in sections:
         lines.append(f"## {section.title}")
@@ -1172,9 +1172,26 @@ def write_report(report_path: Path, sections: list[CheckSection]) -> None:
             for item in section.items:
                 lines.append(f"- [{item.status}] {item.message} ({item.rel_path})")
         lines.append("")
-    content = "\n".join(lines).rstrip() + "\n"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(content, encoding="utf-8")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def count_status(sections: list[CheckSection]) -> dict[str, int]:
+    counts = {"PASS": 0, "FAIL": 0, "WARN": 0}
+    for section in sections:
+        for item in section.items:
+            counts[item.status] = counts.get(item.status, 0) + 1
+    return counts
+
+
+def print_report(sections: list[CheckSection]) -> None:
+    """Stream the report to stdout so CI logs (uploaded to S3) capture it."""
+    sys.stdout.write("\n========== VALIDATION REPORT ==========\n")
+    sys.stdout.write(render_report(sections))
+    counts = count_status(sections)
+    sys.stdout.write(
+        f"========== SUMMARY: PASS={counts['PASS']} FAIL={counts['FAIL']} WARN={counts['WARN']} ==========\n"
+    )
+    sys.stdout.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -1202,7 +1219,7 @@ class Validator:
         input_section = self._new_section("1. Input Directory")
         root = self._resolve_root(input_section)
         if root is None:
-            write_report(Path.cwd() / ".tmp" / "validation_report.md", self.sections)
+            print_report(self.sections)
             return 1
 
         structure_section = self._new_section("2. Structure")
@@ -1220,10 +1237,9 @@ class Validator:
             prefetched_task=self.prefetched_task,
         ).validate(aquila_section)
 
-        report_path = root / ".tmp" / "validation_report.md"
-        write_report(report_path, self.sections)
-        fails = sum(1 for section in self.sections for item in section.items if item.status == "FAIL")
-        print(f"{'PASS' if fails == 0 else 'FAIL'} | errors={fails} | report={report_path}")
+        print_report(self.sections)
+        fails = count_status(self.sections)["FAIL"]
+        print(f"{'PASS' if fails == 0 else 'FAIL'} | errors={fails}")
         return 0 if fails == 0 else 1
 
     def _new_section(self, title: str) -> CheckSection:
@@ -1315,9 +1331,8 @@ def main(argv: list[str]) -> int:
 
         initial_sections, pre_fails = run_pre_rearrangement_checks(ctx.repo_dir)
         if pre_fails:
-            report_path = ctx.repo_dir / ".tmp" / "validation_report.md"
-            write_report(report_path, initial_sections)
-            print(f"FAIL | errors={pre_fails} | report={report_path}")
+            print_report(initial_sections)
+            print(f"FAIL | errors={pre_fails} | pre-rearrangement validation gate failed")
             write_build_dir_marker(args, ctx.repo_dir)
             return 1
 
