@@ -774,30 +774,40 @@ class StructureValidator(SectionValidator):
 class MetadataValidator(SectionValidator):
     def validate(self, section: CheckSection) -> dict[str, Any]:
         path = self.root / "metadata.json"
+        rel = self._rel(path)
         content = read_text(path)
         if content is None:
-            section.add_fail("metadata.json is missing or not readable", self._rel(path))
+            section.add_fail("metadata.json is missing or not readable", rel)
             return {}
+        section.add_pass("metadata.json is readable", rel)
 
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError as exc:
-            section.add_fail(f"metadata.json is invalid JSON: {exc.msg}", self._rel(path))
+            section.add_fail(f"metadata.json is invalid JSON: {exc.msg}", rel)
             return {}
+        section.add_pass("metadata.json is valid JSON", rel)
 
         if not isinstance(parsed, dict):
-            section.add_fail("metadata.json root must be a JSON object", self._rel(path))
+            section.add_fail("metadata.json root must be a JSON object", rel)
             return {}
+        section.add_pass("metadata.json root is a JSON object", rel)
 
-        rel = self._rel(path)
         missing = sorted(REQUIRED_METADATA_FIELDS - set(parsed.keys()))
         extra = sorted(set(parsed.keys()) - REQUIRED_METADATA_FIELDS)
         if missing:
             section.add_fail(f"Missing required metadata fields: {', '.join(missing)}", rel)
+        else:
+            section.add_pass(
+                f"All required metadata fields present ({len(REQUIRED_METADATA_FIELDS)})",
+                rel,
+            )
         if extra:
             section.add_fail(f"Unexpected metadata fields: {', '.join(extra)}", rel)
+        else:
+            section.add_pass("No unexpected metadata fields", rel)
 
-        for key in REQUIRED_METADATA_FIELDS:
+        for key in sorted(REQUIRED_METADATA_FIELDS):
             if key not in parsed:
                 continue
             value = parsed.get(key)
@@ -806,13 +816,21 @@ class MetadataValidator(SectionValidator):
                 continue
             if key not in NULLABLE_METADATA_FIELDS and not value.strip():
                 section.add_fail(f"metadata.{key} cannot be empty", rel)
+                continue
+            section.add_pass(f"metadata.{key} is set", rel)
 
         project_type = str(parsed.get("project_type", "")).strip().lower()
-        if project_type and project_type not in ALLOWED_PROJECT_TYPES:
-            section.add_fail(
-                f"metadata.project_type must be one of: {', '.join(sorted(ALLOWED_PROJECT_TYPES))}",
-                rel,
-            )
+        if project_type:
+            if project_type not in ALLOWED_PROJECT_TYPES:
+                section.add_fail(
+                    f"metadata.project_type must be one of: {', '.join(sorted(ALLOWED_PROJECT_TYPES))}",
+                    rel,
+                )
+            else:
+                section.add_pass(
+                    f"metadata.project_type is a known type ({project_type})",
+                    rel,
+                )
 
         return parsed
 
