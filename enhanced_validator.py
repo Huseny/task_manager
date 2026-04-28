@@ -420,7 +420,6 @@ def stage_sessions_into_repo(ctx: CiContext) -> Path:
 def write_build_dir_marker(args: argparse.Namespace, repo_dir: Path) -> None:
     args.build_dir_file.parent.mkdir(parents=True, exist_ok=True)
     args.build_dir_file.write_text(str(repo_dir.resolve()) + "\n", encoding="utf-8")
-    print(f"build directory written to {args.build_dir_file}")
 
 
 # ---------------------------------------------------------------------------
@@ -673,17 +672,25 @@ class StructureValidator(SectionValidator):
             else:
                 section.add_fail(f"Missing file: {file_name}", self._rel(path))
 
+        unexpected_root = 0
         for entry in sorted(self.root.iterdir(), key=lambda p: p.name.lower()):
             if entry.name not in self.allowed_root_entries and entry.name != "validation_report.md":
                 kind = "directory" if entry.is_dir() else "file"
                 section.add_fail(f"Unexpected {kind} in root: {entry.name}", self._rel(entry))
+                unexpected_root += 1
+        if unexpected_root == 0:
+            section.add_pass("No unexpected entries at repo root", ".")
 
         docs_dir = self.root / "docs"
         if docs_dir.is_dir():
+            invalid_docs = 0
             for entry in sorted(docs_dir.iterdir(), key=lambda p: p.name.lower()):
                 if entry.is_dir() or entry.suffix.lower() != ".md":
                     kind = "directory" if entry.is_dir() else "file"
                     section.add_fail(f"Invalid {kind} in docs/: {entry.name}", self._rel(entry))
+                    invalid_docs += 1
+            if invalid_docs == 0:
+                section.add_pass("docs/ contains only .md files", self._rel(docs_dir))
 
         self._check_tmp_layout(section)
 
@@ -693,6 +700,7 @@ class StructureValidator(SectionValidator):
         else:
             section.add_fail("Missing test script (run_test.sh or run_tests.sh)", "repo/")
 
+        temp_findings = 0
         for entry in self.root.rglob("*"):
             if self._is_temp_entry(entry):
                 kind = "directory" if entry.is_dir() else "file"
@@ -700,6 +708,9 @@ class StructureValidator(SectionValidator):
                     f"Temporary {kind} found: {entry.relative_to(self.root)}",
                     self._rel(entry),
                 )
+                temp_findings += 1
+        if temp_findings == 0:
+            section.add_pass("No stray temporary files or caches found", ".")
 
     def _is_temp_entry(self, path: Path) -> bool:
         name = path.name.lower()
@@ -724,8 +735,10 @@ class StructureValidator(SectionValidator):
         files = [e for e in entries if e.is_file()]
         dirs = [e for e in entries if e.is_dir()]
 
+        layout_failures = 0
         for entry in dirs:
             section.add_fail(f"Invalid directory in .tmp/: {entry.name}", self._rel(entry))
+            layout_failures += 1
 
         audit_nums: list[str] = []
         fix_nums: list[str] = []
@@ -744,31 +757,41 @@ class StructureValidator(SectionValidator):
                 required_extra_count += 1
             else:
                 section.add_fail(f"Invalid file in .tmp/: {name}", self._rel(file))
+                layout_failures += 1
 
         rel_tmp = self._rel(tmp_dir)
         if required_extra_count != 1:
             section.add_fail(
                 "Missing or duplicate test_coverage_and_readme_audit_report.md in .tmp/", rel_tmp,
             )
+            layout_failures += 1
         if len(report_files) != 4:
             section.add_fail(
                 f".tmp must contain exactly 4 audit/fix-check files, found {len(report_files)}", rel_tmp,
             )
+            layout_failures += 1
         if len(files) != 5:
             section.add_fail(f".tmp must contain exactly 5 files, found {len(files)}", rel_tmp)
+            layout_failures += 1
 
         if len(fix_nums) not in {1, 2}:
             section.add_fail(f"Expected 1 or 2 fix-check reports, found {len(fix_nums)}", rel_tmp)
+            layout_failures += 1
         elif len(fix_nums) == 2 and (len(audit_nums) != 2 or sorted(audit_nums) != sorted(fix_nums)):
             section.add_fail(
                 "When there are 2 fix-check reports, audit and fix-check numbers must match", rel_tmp,
             )
+            layout_failures += 1
         elif len(fix_nums) == 1:
             if len(audit_nums) != 3 or fix_nums[0] != "1" or "3" not in audit_nums:
                 section.add_fail(
                     "With one fix-check report, expected audit_report-1-fix_check.md and 3 audits including audit_report-3.md",
                     rel_tmp,
                 )
+                layout_failures += 1
+
+        if layout_failures == 0:
+            section.add_pass(".tmp/ layout is valid (5 files, audit/fix-check pairing)", rel_tmp)
 
 
 class MetadataValidator(SectionValidator):
@@ -898,12 +921,18 @@ class SessionsValidator(SectionValidator):
         legacy_pattern = re.compile(
             r"^(trajectory(?:[-_]\d+)?|develop(?:[-_]\d+)?|bugfix(?:[-_]\d+)?)\.json$"
         )
+        legacy_findings = 0
         for entry in sorted(self.root.iterdir(), key=lambda p: p.name.lower()):
             if entry.is_file() and legacy_pattern.match(entry.name.lower()):
                 section.add_fail(
                     "Legacy session JSON found in root; move it to original_sessions/",
                     self._rel(entry),
                 )
+                legacy_findings += 1
+        if legacy_findings == 0:
+            section.add_pass(
+                "No legacy session JSON files at repo root", "."
+            )
 
     def _check_bundle_structure(self, section: CheckSection, sessions_dir: Path) -> None:
         child_dirs = sorted([p for p in sessions_dir.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
@@ -1350,7 +1379,6 @@ def main(argv: list[str]) -> int:
         initial_sections, pre_fails = run_pre_rearrangement_checks(ctx.repo_dir)
         if pre_fails:
             print_report(initial_sections)
-            print(f"FAIL | errors={pre_fails} | pre-rearrangement validation gate failed")
             write_build_dir_marker(args, ctx.repo_dir)
             return 1
 
