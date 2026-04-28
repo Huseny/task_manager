@@ -707,6 +707,23 @@ class StructureValidator(SectionValidator):
     }
     TEMP_SUFFIXES = (".temp", ".swp", ".swo", ".bak", ".old", ".orig", ".rej")
 
+    REPO_FORBIDDEN_SUBDIR_NAMES = {"docs", "doc", "documentation"}
+
+    UNNECESSARY_EXACT_NAMES = {
+        # Virtualenvs
+        "venv", ".venv", "env",
+        # JS deps
+        "node_modules",
+        # IDE / editor state
+        ".idea", ".vscode",
+        # Build / framework caches
+        "dist", "build", ".next", ".nuxt", ".turbo", ".parcel-cache",
+        # Coverage / test artifacts
+        "coverage", ".nyc_output", "htmlcov",
+        # OS noise
+        ".DS_Store", "__MACOSX", "Thumbs.db",
+    }
+
     def validate(self, section: CheckSection) -> None:
         for dirname in self.mandatory_dirs:
             path = self.root / dirname
@@ -761,7 +778,10 @@ class StructureValidator(SectionValidator):
             section.add_fail("Missing test script repo/run_tests.sh", "repo/")
 
         temp_findings = 0
+        unnecessary_findings = 0
+        env_findings = 0
         for entry in self.root.rglob("*"):
+            name = entry.name
             if self._is_temp_entry(entry):
                 kind = "directory" if entry.is_dir() else "file"
                 section.add_fail(
@@ -769,8 +789,50 @@ class StructureValidator(SectionValidator):
                     self._rel(entry),
                 )
                 temp_findings += 1
+                continue
+            if name in self.UNNECESSARY_EXACT_NAMES:
+                kind = "directory" if entry.is_dir() else "file"
+                section.add_fail(
+                    f"Unnecessary {kind} found: {entry.relative_to(self.root)}",
+                    self._rel(entry),
+                )
+                unnecessary_findings += 1
+                continue
+            if (
+                entry.is_file()
+                and (name == ".env" or name.startswith(".env."))
+                and name != ".env.example"
+            ):
+                section.add_fail(
+                    f"Dotenv file found: {entry.relative_to(self.root)}",
+                    self._rel(entry),
+                )
+                env_findings += 1
         if temp_findings == 0:
             section.add_pass("No stray temporary files or caches found", ".")
+        if unnecessary_findings == 0:
+            section.add_pass(
+                "No virtualenv/build/IDE/OS-noise paths found", "."
+            )
+        if env_findings == 0:
+            section.add_pass("No dotenv files found (other than .env.example)", ".")
+
+        repo_subdir = self.root / "repo"
+        if repo_subdir.is_dir():
+            forbidden_repo_findings = 0
+            for entry in repo_subdir.rglob("*"):
+                if not entry.is_dir():
+                    continue
+                if entry.name.lower() in self.REPO_FORBIDDEN_SUBDIR_NAMES:
+                    section.add_fail(
+                        f"Forbidden directory under repo/: {entry.relative_to(self.root)}",
+                        self._rel(entry),
+                    )
+                    forbidden_repo_findings += 1
+            if forbidden_repo_findings == 0:
+                section.add_pass(
+                    "No docs/doc/documentation directories under repo/", "repo/"
+                )
 
     def _is_temp_entry(self, path: Path) -> bool:
         name = path.name.lower()

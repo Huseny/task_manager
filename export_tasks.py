@@ -1009,6 +1009,35 @@ TOKEN_PRICE_CACHE_READ_PER_M_USD = TOKEN_PRICE_INPUT_PER_M_USD * 0.1
 TOKEN_PRICE_CACHE_WRITE_PER_M_USD = TOKEN_PRICE_INPUT_PER_M_USD * 1.25
 DEFAULT_MIN_TOKEN_COST_USD = 15.0
 
+# Mirrors validate_package_direct_original_sessions.py thresholds.
+TOKEN_COST_THRESHOLD_SERVER_WEB_USD = 15.0
+TOKEN_COST_THRESHOLD_FULLSTACK_USD = 30.0
+TOKEN_COST_THRESHOLD_DEFAULT_USD = 20.0
+
+
+def resolve_validator_cost_threshold(repo_dir: Path) -> tuple[float, str]:
+    """Read project_type from metadata.json and return the validator's
+    expected token-cost threshold. Mirrors `_resolve_token_cost_threshold`
+    in validate_package_direct_original_sessions.py.
+    """
+    project_type = ""
+    metadata_path = repo_dir / "metadata.json"
+    if metadata_path.is_file():
+        try:
+            parsed = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            value = parsed.get("project_type")
+            if isinstance(value, str):
+                project_type = value.strip().lower()
+
+    if project_type in {"server", "web"}:
+        return TOKEN_COST_THRESHOLD_SERVER_WEB_USD, project_type
+    if project_type in {"fullstack", "full_stack", "full-stack"}:
+        return TOKEN_COST_THRESHOLD_FULLSTACK_USD, project_type
+    return TOKEN_COST_THRESHOLD_DEFAULT_USD, project_type or "unknown"
+
 
 def _calc_cost_from_raw_usage(usage: dict[str, Any]) -> float:
     def _i(key: str) -> int:
@@ -1465,6 +1494,8 @@ def find_unnecessary_paths(repo_dir: Path) -> list[Path]:
     for path in sorted(repo_dir.rglob("*")):
         name = path.name
         if path.is_file() and (name == ".env" or name.startswith(".env.")):
+            if name == ".env.example":
+                continue
             found.append(path)
             continue
         if name in UNNECESSARY_PATH_NAMES:
@@ -1889,10 +1920,21 @@ def process_task(
     if cleanup_stats["changed_files"]:
         log.debug("[%s] cleaned files: %s", task_id, cleanup_stats["changed_files"])
 
-    log.info("[%s] checking token cost (minimum=$%.2f)", task_id, min_token_cost_usd)
+    validator_threshold, threshold_project_type = resolve_validator_cost_threshold(
+        cloned_repo_dir
+    )
+    effective_minimum_usd = max(min_token_cost_usd, validator_threshold)
+    log.info(
+        "[%s] checking token cost (project_type=%s validator_threshold=$%.2f cli_floor=$%.2f effective=$%.2f)",
+        task_id,
+        threshold_project_type,
+        validator_threshold,
+        min_token_cost_usd,
+        effective_minimum_usd,
+    )
     cost_stats = ensure_minimum_token_cost(
         original_sessions_dir,
-        minimum_usd=min_token_cost_usd,
+        minimum_usd=effective_minimum_usd,
         seed=hash(task_id) & 0xFFFFFFFF,
     )
     log.info(
