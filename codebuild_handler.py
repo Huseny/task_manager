@@ -6,7 +6,7 @@ import sys
 
 
 def _load_buildspec():
-    default_path = Path(__file__).parent / "enhanced_buildspec.yml"
+    default_path = Path(__file__).parent / "buildspec.yml"
     try:
         content = default_path.read_text()
         content = content if content.strip() else None
@@ -77,8 +77,8 @@ def monitor_build(build_id):
 if __name__ == "__main__":
     # CONFIGURATION
     PROJECT_NAME = "MindflowTaskExecutor"
-    TASK_ID = "req_e07b53845043"
-    AQUILA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI5MGQ2NGQ1YS0zZDg2LTRjOTQtOWNjMS1kYjY3MTI1NTc3NzAiLCJleHAiOjE3NzczNjQ3NjR9.hpnSC3aHZRKOuglJkRVwQ6YTxJzQvig1vrg-h4PKAHY"
+    TASK_ID = ""
+    AQUILA_TOKEN = ""
 
     bid = start_codebuild_task(PROJECT_NAME, TASK_ID, AQUILA_TOKEN)
     monitor_build(bid)
