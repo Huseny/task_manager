@@ -1438,8 +1438,13 @@ UNNECESSARY_PATH_NAMES = {
     # Coverage / test artifacts
     "coverage", ".nyc_output", "htmlcov",
     # OS noise
-    ".DS_Store",
+    ".DS_Store", "__MACOSX", "Thumbs.db",
 }
+
+# Subset of UNNECESSARY_PATH_NAMES safe to auto-delete before the cleanliness
+# check. `.env*` files are intentionally NOT here -- they may contain secrets
+# the user wants surfaced rather than silently dropped.
+AUTO_PRUNE_PATH_NAMES = set(UNNECESSARY_PATH_NAMES)
 
 REPO_FORBIDDEN_SUBDIR_NAMES = {
     ".tmp", "tmp", "temp", "_tmp",
@@ -1482,6 +1487,33 @@ def find_forbidden_repo_subdirs(repo_dir: Path) -> list[Path]:
         if path.name.lower() in REPO_FORBIDDEN_SUBDIR_NAMES:
             found.append(path)
     return found
+
+
+def prune_safe_unnecessary_paths(repo_dir: Path) -> dict[str, Any]:
+    """Delete safely-removable noise (caches, venvs, OS files) before the
+    cleanliness check. Returns counts of what was removed.
+    """
+    removed_paths: list[str] = []
+    # Deepest-first so removing a parent doesn't invalidate child paths we
+    # might still want to log; also avoids walking into already-deleted dirs.
+    for path in sorted(repo_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if path.name not in AUTO_PRUNE_PATH_NAMES:
+            continue
+        if not path.exists():
+            continue
+        rel = path.relative_to(repo_dir).as_posix()
+        try:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink()
+            removed_paths.append(rel)
+        except OSError:
+            continue
+    return {
+        "removed_count": len(removed_paths),
+        "removed_paths": removed_paths,
+    }
 
 
 def assert_repo_clean(repo_dir: Path) -> dict[str, Any]:
@@ -1892,6 +1924,16 @@ def process_task(
     # Cleanliness check runs before .tmp/ is moved aside. The forbidden-
     # subdir check intentionally only looks under a `repo/` subfolder, so a
     # `.tmp/` at the cloned root is fine.
+    log.info("[%s] pruning safely-removable noise before cleanliness check", task_id)
+    prune_stats = prune_safe_unnecessary_paths(cloned_repo_dir)
+    log.info(
+        "[%s] pruned %d auto-removable path(s)",
+        task_id,
+        prune_stats["removed_count"],
+    )
+    if prune_stats["removed_paths"]:
+        log.debug("[%s] pruned paths: %s", task_id, prune_stats["removed_paths"])
+
     log.info("[%s] checking repo cleanliness", task_id)
     while True:
         try:
