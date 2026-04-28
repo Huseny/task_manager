@@ -26,17 +26,21 @@ For each task ID in --task-ids-file, this script:
      validator's "last message must be assistant text" check passes.
   8. Inflates `input_tokens` on existing usage records until total session
      cost meets a minimum (default $15) -- see Token cost.
-  9. Removes git artifacts (.git, .gitignore, .gitattributes, .gitmodules,
-     .github) so they aren't shipped.
- 10. Moves the repo's `.tmp/` (if any) out to `<output>/TASK-<id>/.tmp` so
+  9. Normalizes api-spec filename variants (apiSpec.md, api_spec.md,
+     api-specs.md, apispec.md, ...) by renaming them to the canonical
+     `api-spec.md`. The validator's filename check is strict; this catches
+     near-misses without requiring a manual fix.
+ 10. Removes git artifacts (.git, .gitattributes, .gitmodules, .github) so
+     they aren't shipped. `.gitignore` is intentionally kept.
+ 11. Moves the repo's `.tmp/` (if any) out to `<output>/TASK-<id>/.tmp` so
      it is excluded from the shipped zip.
- 11. Zips the cleaned repo, then extracts it to a scratch dir for validation.
- 12. Runs `validate_package_direct_original_sessions.py` against the
+ 12. Zips the cleaned repo, then extracts it to a scratch dir for validation.
+ 13. Runs `validate_package_direct_original_sessions.py` against the
      extracted directory.
- 13. On pass: replaces `original_sessions/` in the extract with a
+ 14. On pass: replaces `original_sessions/` in the extract with a
      Claude-project-named zip (e.g. `-home-husen-...-TASK-req-xxx.zip`)
      and rebuilds the final TASK zip from the extract.
- 14. Cleans up the per-task work dir (unless --keep-work-dir).
+ 15. Cleans up the per-task work dir (unless --keep-work-dir).
 
 Relationship to run_reconstruction_export_from_folder.py
 --------------------------------------------------------
@@ -94,7 +98,8 @@ CLI flags
                               randomly added to existing usage records until
                               the threshold is met. 0 disables. Default: 15.0.
   --keep-work-dir             Keep the work dir at end of run; useful for
-                              inspecting `<work>/<task>/_validate/validate_extract/`.
+                              inspecting `<work>/<task>/_extract/validate_extract/`
+                              and `<work>/<task>/_validate/`.
   -v, --verbose               Enable DEBUG-level logging.
 
 Output layout
@@ -129,9 +134,12 @@ a wrapper folder.
 Validation flow
 ---------------
 The flow extracts the just-built TASK zip into
-`<work>/<task>/_validate/validate_extract/` and runs the validator against
-that directory. On the first pass the result is wrapped up; on failure
-behavior depends on `--interactive-validation`:
+`<work>/<task>/_extract/validate_extract/` and runs the validator against
+that directory. Validation artifacts (report, stdout, stderr) are persisted
+to the output dir's `validation/` and mirrored into `<work>/<task>/_validate/`
+so the work dir's `_validate/` only ever holds artifacts -- the extracted
+package lives separately under `_extract/`. On the first pass the result is
+wrapped up; on failure behavior depends on `--interactive-validation`:
 
   Without --interactive-validation (CI mode):
     - The TASK zip is deleted.
@@ -151,7 +159,7 @@ behavior depends on `--interactive-validation`:
 
     Manual edits should be made under:
 
-        <work>/<task>/_validate/validate_extract/
+        <work>/<task>/_extract/validate_extract/
 
     Edits to `original_sessions/` survive across retries. On final pass /
     zip-anyway, the TASK zip is rebuilt from the extract, so manual edits
@@ -281,7 +289,6 @@ GITHUB_PAT_ENV_VAR = "GITHUB_PAT"
 DOTENV_FILENAME = ".env"
 GIT_ARTIFACT_NAMES = {
     ".git",
-    ".gitignore",
     ".gitattributes",
     ".gitmodules",
     ".github",
@@ -1348,6 +1355,65 @@ def normalize_original_sessions_dirs(root: Path) -> dict[str, int]:
     }
 
 
+API_SPEC_CANONICAL_NAME = "api-spec.md"
+
+
+def _is_api_spec_variant(name: str) -> bool:
+    """True if `name` looks like an api-spec.md variant (apiSpec.md,
+    api_spec.md, api-specs.md, APISpec.MD, etc.).
+    """
+    base, dot, ext = name.rpartition(".")
+    if not dot or ext.lower() != "md":
+        return False
+    normalized = re.sub(r"[^a-z0-9]", "", base.lower())
+    return normalized in {"apispec", "apispecs"}
+
+
+def normalize_api_spec_filename(repo_dir: Path) -> dict[str, Any]:
+    """Rename any api-spec.md variant (apiSpec.md, api_spec.md, api-specs.md,
+    apispec.md, ...) to the canonical 'api-spec.md' so the validator's
+    filename check passes. If the canonical file already exists in the same
+    dir, the variant is left alone (and a warning is logged).
+    """
+    renamed: list[tuple[str, str]] = []
+    skipped_already_canonical = 0
+    skipped_conflict: list[tuple[str, str]] = []
+
+    candidates = [p for p in repo_dir.rglob("*") if p.is_file()]
+    for path in sorted(candidates):
+        if not _is_api_spec_variant(path.name):
+            continue
+        if path.name == API_SPEC_CANONICAL_NAME:
+            skipped_already_canonical += 1
+            continue
+        destination = path.with_name(API_SPEC_CANONICAL_NAME)
+        if destination.exists():
+            log.warning(
+                "api-spec: canonical %s already exists, leaving variant alone: %s",
+                destination,
+                path,
+            )
+            skipped_conflict.append((str(path), str(destination)))
+            continue
+        try:
+            path.rename(destination)
+        except OSError as exc:
+            log.warning(
+                "api-spec: failed to rename %s -> %s: %s", path, destination, exc
+            )
+            skipped_conflict.append((str(path), str(destination)))
+            continue
+        log.info("api-spec: renamed %s -> %s", path.name, destination.name)
+        renamed.append((str(path), str(destination)))
+
+    return {
+        "renamed_count": len(renamed),
+        "renamed_files": renamed,
+        "skipped_already_canonical": skipped_already_canonical,
+        "skipped_conflict_count": len(skipped_conflict),
+    }
+
+
 def remove_git_artifacts(root: Path) -> int:
     removed = 0
     paths = sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True)
@@ -1515,15 +1581,26 @@ def _extract_zip_for_validation(zip_path: Path, scratch_dir: Path) -> Path:
 
 def _run_validator_on_dir(
     extract_root: Path,
-    persist_dir: Path,
+    persist_dirs: list[Path],
     zip_path: Path,
 ) -> dict[str, Any]:
+    """Run the validator and persist its artifacts (report + stdout/stderr).
+
+    `persist_dirs[0]` is canonical -- its paths are returned in the info dict.
+    Any additional dirs receive copies of the same artifacts (used to mirror
+    artifacts into the work dir's `_validate/` for inspection).
+    """
+    if not persist_dirs:
+        raise ValueError("persist_dirs must contain at least one path")
+
     validator_path = Path(__file__).resolve().parent / VALIDATOR_SCRIPT_NAME
     if not validator_path.exists():
         raise PackageValidationError(
             f"Validator script not found: {validator_path}"
         )
-    persist_dir.mkdir(parents=True, exist_ok=True)
+
+    primary_dir = persist_dirs[0]
+    primary_dir.mkdir(parents=True, exist_ok=True)
 
     result = subprocess.run(
         [sys.executable, str(validator_path), str(extract_root)],
@@ -1531,16 +1608,23 @@ def _run_validator_on_dir(
         text=True,
     )
 
-    stdout_path = persist_dir / "validation_stdout.log"
-    stderr_path = persist_dir / "validation_stderr.log"
+    stdout_path = primary_dir / "validation_stdout.log"
+    stderr_path = primary_dir / "validation_stderr.log"
     stdout_path.write_text(result.stdout or "", encoding="utf-8")
     stderr_path.write_text(result.stderr or "", encoding="utf-8")
 
     report_src = extract_root / ".tmp" / "validation_report.md"
     report_persisted: Path | None = None
     if report_src.is_file():
-        report_persisted = persist_dir / "validation_report.md"
+        report_persisted = primary_dir / "validation_report.md"
         shutil.copy2(report_src, report_persisted)
+
+    for mirror_dir in persist_dirs[1:]:
+        mirror_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(stdout_path, mirror_dir / stdout_path.name)
+        shutil.copy2(stderr_path, mirror_dir / stderr_path.name)
+        if report_persisted is not None:
+            shutil.copy2(report_persisted, mirror_dir / report_persisted.name)
 
     info: dict[str, Any] = {
         "exit_code": result.returncode,
@@ -1690,6 +1774,16 @@ def process_task(
         cost_stats["reason"],
     )
 
+    log.info("[%s] normalizing api-spec.md filename variants", task_id)
+    api_spec_stats = normalize_api_spec_filename(cloned_repo_dir)
+    log.info(
+        "[%s] api-spec: renamed=%d already_canonical=%d conflicts=%d",
+        task_id,
+        api_spec_stats["renamed_count"],
+        api_spec_stats["skipped_already_canonical"],
+        api_spec_stats["skipped_conflict_count"],
+    )
+
     log.info("[%s] removing git artifacts", task_id)
     removed_git_artifacts = remove_git_artifacts(cloned_repo_dir)
     log.info("[%s] removed %d git artifact path(s)", task_id, removed_git_artifacts)
@@ -1718,8 +1812,13 @@ def process_task(
         zip_path.stat().st_size,
     )
 
+    # Output dir holds the artifacts the user takes; work dir mirrors them
+    # under `_validate/` so they're easy to find when --keep-work-dir is used.
+    # The extract lives under `_extract/` so `_validate/` only ever contains
+    # validation artifacts (report + logs), not the extracted repo.
     validation_persist_dir = task_output_dir / "validation"
-    validation_scratch_dir = task_work_dir / "_validate"
+    validation_artifacts_dir = task_work_dir / "_validate"
+    validation_extract_parent = task_work_dir / "_extract"
     validation_info: dict[str, Any] | None = None
     validation_outcome = "passed"
     validation_attempts = 0
@@ -1727,9 +1826,9 @@ def process_task(
     log.info(
         "[%s] extracting zip for validation -> %s",
         task_id,
-        validation_scratch_dir / "validate_extract",
+        validation_extract_parent / "validate_extract",
     )
-    extract_root = _extract_zip_for_validation(zip_path, validation_scratch_dir)
+    extract_root = _extract_zip_for_validation(zip_path, validation_extract_parent)
     sessions_zip_info: dict[str, Any] = {"performed": False, "reason": "not_run"}
 
     try:
@@ -1743,7 +1842,9 @@ def process_task(
             )
             try:
                 validation_info = _run_validator_on_dir(
-                    extract_root, validation_persist_dir, zip_path
+                    extract_root,
+                    [validation_persist_dir, validation_artifacts_dir],
+                    zip_path,
                 )
                 log.info(
                     "[%s] validation PASSED (report=%s)",
@@ -1841,8 +1942,8 @@ def process_task(
                 )
                 continue
     finally:
-        if not keep_work_dir and extract_root.exists():
-            shutil.rmtree(extract_root, ignore_errors=True)
+        if not keep_work_dir and validation_extract_parent.exists():
+            shutil.rmtree(validation_extract_parent, ignore_errors=True)
 
     assert validation_info is not None
 
@@ -1888,6 +1989,10 @@ def process_task(
         "sessions_zip_performed": sessions_zip_info.get("performed", False),
         "sessions_zip_name": sessions_zip_info.get("zip_name", ""),
         "sessions_zip_reason": sessions_zip_info.get("reason", ""),
+        "api_spec_renamed_count": api_spec_stats["renamed_count"],
+        "api_spec_renamed_files": api_spec_stats["renamed_files"],
+        "api_spec_skipped_already_canonical": api_spec_stats["skipped_already_canonical"],
+        "api_spec_skipped_conflict_count": api_spec_stats["skipped_conflict_count"],
     }
 
 
@@ -1960,7 +2065,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Do not delete the working directory or the validator's temporary "
             "extract directory after the run. Useful for inspecting exactly what "
-            "the validator saw under <work-dir>/<task>/_validate/validate_extract/."
+            "the validator saw under <work-dir>/<task>/_extract/validate_extract/. "
+            "Validation artifacts are mirrored under <work-dir>/<task>/_validate/."
         ),
     )
     return parser
