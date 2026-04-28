@@ -1665,8 +1665,10 @@ def remove_validator_tmp(extract_root: Path) -> bool:
 
 
 def package_sessions_dir_as_zip(extract_root: Path) -> dict[str, Any]:
-    """Replace extract_root/original_sessions/ with a sibling zip whose name is
-    derived from the session's `cwd` field (Claude-project-folder style).
+    """Repackage extract_root/original_sessions/ contents into a single zip
+    placed inside original_sessions/ itself (named after the session's `cwd`
+    field, Claude-project-folder style). The original loose files are removed
+    so the directory ends up containing only the zip.
     """
     sessions_dir = extract_root / "original_sessions"
     if not sessions_dir.is_dir():
@@ -1681,19 +1683,32 @@ def package_sessions_dir_as_zip(extract_root: Path) -> dict[str, Any]:
         )
         return {"performed": False, "reason": "no_cwd_in_sessions"}
 
-    target_zip = extract_root / f"{basename}.zip"
-    if target_zip.exists():
-        target_zip.unlink()
-    with zipfile.ZipFile(target_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    # Build zip outside sessions_dir first so we don't archive the zip into
+    # itself, then move it back inside after clearing the loose contents.
+    staging_zip = extract_root / f".{basename}.zip.tmp"
+    if staging_zip.exists():
+        staging_zip.unlink()
+    with zipfile.ZipFile(staging_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(sessions_dir.rglob("*")):
             if not path.is_file():
                 continue
             arcname = path.relative_to(sessions_dir).as_posix()
             zf.write(path, arcname=arcname)
 
-    shutil.rmtree(sessions_dir)
+    for child in list(sessions_dir.iterdir()):
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+    target_zip = sessions_dir / f"{basename}.zip"
+    if target_zip.exists():
+        target_zip.unlink()
+    shutil.move(str(staging_zip), str(target_zip))
+
     log.info(
-        "sessions-zip: packaged original_sessions/ as %s", target_zip.name
+        "sessions-zip: packaged original_sessions/ contents as %s",
+        target_zip.relative_to(extract_root).as_posix(),
     )
     return {
         "performed": True,
