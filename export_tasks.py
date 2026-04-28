@@ -1018,7 +1018,9 @@ TOKEN_COST_THRESHOLD_DEFAULT_USD = 20.0
 def resolve_validator_cost_threshold(repo_dir: Path) -> tuple[float, str]:
     """Read project_type from metadata.json and return the validator's
     expected token-cost threshold. Mirrors `_resolve_token_cost_threshold`
-    in validate_package_direct_original_sessions.py.
+    in validate_package_direct_original_sessions.py, but also tolerates
+    surface variants like "Full Stack", "FullStack", "full-stack" so a
+    fullstack task always trips the $30 floor.
     """
     project_type = ""
     metadata_path = repo_dir / "metadata.json"
@@ -1032,9 +1034,12 @@ def resolve_validator_cost_threshold(repo_dir: Path) -> tuple[float, str]:
             if isinstance(value, str):
                 project_type = value.strip().lower()
 
-    if project_type in {"server", "web"}:
+    # Strip every non-alphanumeric char so "Full Stack", "full-stack",
+    # "full_stack", "FullStack" all collapse to "fullstack".
+    canonical = re.sub(r"[^a-z0-9]+", "", project_type)
+    if canonical in {"server", "web"}:
         return TOKEN_COST_THRESHOLD_SERVER_WEB_USD, project_type
-    if project_type in {"fullstack", "full_stack", "full-stack"}:
+    if canonical == "fullstack":
         return TOKEN_COST_THRESHOLD_FULLSTACK_USD, project_type
     return TOKEN_COST_THRESHOLD_DEFAULT_USD, project_type or "unknown"
 
