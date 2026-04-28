@@ -1,0 +1,148 @@
+version: 0.2
+
+env:
+  variables:
+    REPORT_BUCKET: "mindflow-tasks-log"
+    CLONE_DIR: "project_bundle"
+    TARGET_DIR: "project_bundle/repo"
+    COMBINED_LOG: "/tmp/build-execution.log"
+    AQUILA_TASK_API_URL: "https://api.aquila-core.net/api/v1/mindflow-tasks/{task_id}"
+  secrets-manager:
+    DOCKER_USER: "dockerhub/creds:username"
+    DOCKER_TOKEN: "dockerhub/creds:password"
+    GITHUB_PAT: "github/pat:token"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - echo "=== INSTALL PHASE ==="
+      - touch "$COMBINED_LOG"
+      - |
+        set +e
+        fail_and_upload() {
+          reason="$1"
+          echo "\n[FAILURE] $reason" >> "$COMBINED_LOG"
+          if [ -n "${REPORT_BUCKET:-}" ] && command -v aws >/dev/null 2>&1; then
+            KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
+            JOB_ID_VAL="${JOB_ID:-${CODEBUILD_BUILD_ID}}"
+            aws s3 cp "$COMBINED_LOG" "s3://${REPORT_BUCKET}/${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}/build-execution.log" >/dev/null 2>&1 || true
+          fi
+          exit 1
+        }
+
+        echo "==================== DOCKER ====================" >> "$COMBINED_LOG"
+        docker --version >> "$COMBINED_LOG" 2>&1 || fail_and_upload "Docker not available"
+        docker info > /dev/null 2>&1 || fail_and_upload "Docker daemon not available — ensure CodeBuild project has privilegedMode=true"
+
+  pre_build:
+    commands:
+      - |
+        set +e
+        fail_and_upload() {
+          reason="$1"
+          echo "\n[FAILURE] $reason" >> "$COMBINED_LOG"
+          if [ -n "${REPORT_BUCKET:-}" ]; then
+            KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
+            JOB_ID_VAL="${JOB_ID:-${CODEBUILD_BUILD_ID}}"
+            aws s3 cp "$COMBINED_LOG" "s3://${REPORT_BUCKET}/${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}/build-execution.log" || true
+          fi
+          exit 1
+        }
+
+        echo "==================== VALIDATOR CI PREP ====================" >> "$COMBINED_LOG"
+        export TASK_ID="${TASK_ID:-${AQUILA_TASK_ID:-${task_id:-}}}"
+        export AQUILA_ACCESS_TOKEN="${AQUILA_ACCESS_TOKEN:-${ACCESS_TOKEN:-${task_access_token:-}}}"
+
+        if [ -z "${TASK_ID:-}" ]; then
+          fail_and_upload "Task not found or invalid Task ID provided"
+        fi
+
+        if [ -z "${AQUILA_ACCESS_TOKEN:-}" ]; then
+          fail_and_upload "Aquila access token not found or invalid token provided"
+        fi
+
+        if [ -n "${GITHUB_PAT:-}" ]; then
+          git config --global url."https://${GITHUB_PAT}@github.com/".insteadOf "https://github.com/"
+        fi
+
+        if ! python3 validator.py --prepare-ci >> "$COMBINED_LOG" 2>&1; then
+          fail_and_upload "validator.py CI preparation or validation failed"
+        fi
+
+  build:
+    commands:
+      - |
+        set +e
+        fail_and_upload() {
+          reason="$1"
+          echo "\n[FAILURE] $reason" >> "$COMBINED_LOG"
+          if [ -n "${REPORT_BUCKET:-}" ]; then
+            KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
+            JOB_ID_VAL="${JOB_ID:-${CODEBUILD_BUILD_ID}}"
+            aws s3 cp "$COMBINED_LOG" "s3://${REPORT_BUCKET}/${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}/build-execution.log" || true
+          fi
+          exit 1
+        }
+
+        if [ -f /tmp/build_dir ]; then cd "$(cat /tmp/build_dir)"; else fail_and_upload "Target directory not found"; fi
+
+        echo "\n==================== DOCKER SETUP ====================" >> "$COMBINED_LOG"
+        echo "$DOCKER_TOKEN" | docker login --username "$DOCKER_USER" --password-stdin >> "$COMBINED_LOG" 2>&1
+
+        if docker compose version >/dev/null 2>&1; then
+          COMPOSE_CMD="docker compose"
+        elif command -v docker-compose >/dev/null 2>&1; then
+          COMPOSE_CMD="docker-compose"
+        else
+          fail_and_upload "Docker Compose is not installed"
+        fi
+
+        if ! $COMPOSE_CMD up -d >> "$COMBINED_LOG" 2>&1; then
+          fail_and_upload "docker compose up failed"
+        fi
+
+        echo "\n==================== TEST SUITE ====================" >> "$COMBINED_LOG"
+        $COMPOSE_CMD stop >> "$COMBINED_LOG" 2>&1 || true
+        TEST_SCRIPT=""
+        [ -f "run_tests.sh" ] && TEST_SCRIPT="run_tests.sh"
+        [ -f "run_test.sh" ] && [ -z "$TEST_SCRIPT" ] && TEST_SCRIPT="run_test.sh"
+
+        if [ -n "$TEST_SCRIPT" ]; then
+          chmod +x "$TEST_SCRIPT"
+          if ! ./"$TEST_SCRIPT" >> "$COMBINED_LOG" 2>&1; then
+            fail_and_upload "$TEST_SCRIPT failed"
+          fi
+        else
+          fail_and_upload "No test script found"
+        fi
+
+  post_build:
+    commands:
+      - |
+        set -e
+        echo "\n==================== POST-BUILD CLEANUP ====================" >> "$COMBINED_LOG"
+        if [ -f /tmp/build_dir ]; then cd "$(cat /tmp/build_dir)"; fi
+
+        if docker compose version >/dev/null 2>&1; then
+          COMPOSE_CMD="docker compose"
+        elif command -v docker-compose >/dev/null 2>&1; then
+          COMPOSE_CMD="docker-compose"
+        else
+          COMPOSE_CMD=""
+        fi
+
+        if [ -n "$COMPOSE_CMD" ]; then
+          echo "\n--- Docker Service Logs ---" >> "$COMBINED_LOG"
+          $COMPOSE_CMD logs --no-color >> "$COMBINED_LOG" 2>&1 || true
+          $COMPOSE_CMD down >> "$COMBINED_LOG" 2>&1 || true
+        fi
+
+        echo "\nBuild process finished at $(date)" >> "$COMBINED_LOG"
+
+        KEY_PREFIX=$(echo "${REPORT_PREFIX:-}" | sed 's#^/*##;s#/*$##')
+        JOB_ID_VAL="${JOB_ID:-${CODEBUILD_BUILD_ID}}"
+        if [ -n "${REPORT_BUCKET:-}" ]; then
+           aws s3 cp "$COMBINED_LOG" "s3://${REPORT_BUCKET}/${KEY_PREFIX:+${KEY_PREFIX}/}${JOB_ID_VAL}/build-execution.log"
+        fi

@@ -1,16 +1,255 @@
 #!/usr/bin/env python3
 """
-Fetch tasks by task ID (from a text file), assemble a clean delivery package
-per task, validate it, and emit one zip per task.
+export_tasks.py
+===============
 
-This is the text-file-driven variant of run_reconstruction_export_from_folder.py:
-task IDs come from a flat text file (one per line). There is no extra
-sessions folder to merge in -- the only session source is the archive linked
-on the task itself. Otherwise, the per-task pipeline is identical: clone repo,
-download + extract + flatten + normalize sessions, sync metadata.json prompt
-and project info from Aquila, rename JSONLs to match sessionId, trim trailing
-non-assistant messages, ensure minimum token cost, remove git artifacts, move
-.tmp aside, zip, and validate via validate_package_direct_original_sessions.
+Fetch Aquila tasks by task ID (read from a text file), assemble a clean
+delivery package per task, run all required fixups, validate the package,
+and emit one zip per task.
+
+Overview
+--------
+For each task ID in --task-ids-file, this script:
+
+  1. Fetches the task from Aquila (bearer-token authenticated).
+  2. Shallow-clones the task's GitHub repo (private, via PAT).
+  3. Downloads and extracts the task's session archive (zip or rar; supports
+     direct URLs and Google Drive share links).
+  4. Normalizes the session JSON/JSONL via `normalize_sessions_zip`.
+  5. Syncs `metadata.json` with the task payload from Aquila:
+       - `prompt` is overwritten from `prompt_text`
+       - project_type / framework / language fields are reconciled with the
+         Aquila task fields (with "none" cascade rules; see Project info sync).
+  6. Renames each session JSONL to `<sessionId>.jsonl` so file names match
+     their internal `sessionId`.
+  7. Trims trailing non-assistant messages from each session JSONL so the
+     validator's "last message must be assistant text" check passes.
+  8. Inflates `input_tokens` on existing usage records until total session
+     cost meets a minimum (default $15) -- see Token cost.
+  9. Removes git artifacts (.git, .gitignore, .gitattributes, .gitmodules,
+     .github) so they aren't shipped.
+ 10. Moves the repo's `.tmp/` (if any) out to `<output>/TASK-<id>/.tmp` so
+     it is excluded from the shipped zip.
+ 11. Zips the cleaned repo, then extracts it to a scratch dir for validation.
+ 12. Runs `validate_package_direct_original_sessions.py` against the
+     extracted directory.
+ 13. On pass: replaces `original_sessions/` in the extract with a
+     Claude-project-named zip (e.g. `-home-husen-...-TASK-req-xxx.zip`)
+     and rebuilds the final TASK zip from the extract.
+ 14. Cleans up the per-task work dir (unless --keep-work-dir).
+
+Relationship to run_reconstruction_export_from_folder.py
+--------------------------------------------------------
+This is the text-file-driven variant of that script. The per-task pipeline
+is identical except:
+
+  - Task IDs come from a flat text file (one per line) instead of being
+    derived from subfolder names.
+  - There is no "extra sessions folder" to merge in -- the only session
+    source is the archive URL on the task payload.
+
+Credentials
+-----------
+  Aquila bearer token  Passed via the required `--aquila-bearer-token` flag.
+  GitHub PAT           Read from the `GITHUB_PAT` environment variable
+                       (used to clone private repos via x-access-token auth).
+                       If the env var isn't already set, the script also
+                       looks for a `.env` file -- first in the current
+                       working directory, walking up to filesystem root,
+                       then alongside this script. Format:
+
+                           GITHUB_PAT=ghp_xxxxxxxxxxxx
+
+                       Lines starting with `#` are comments. `export ` prefixes
+                       and surrounding single/double quotes are tolerated.
+                       Existing environment values are NOT overwritten.
+
+Config constants (set at top of file)
+-------------------------------------
+  GIT_ARTIFACT_NAMES   Names removed from the cloned repo before zipping.
+  ZIP_NOISE_NAMES      Names cleaned out of the extracted sessions archive.
+  DEFAULT_MIN_TOKEN_COST_USD  Default token-cost floor per task ($15).
+  DEFAULT_TASK_URL_TEMPLATE   Aquila task-lookup URL; supports {task_id}.
+  GITHUB_PAT_ENV_VAR   Name of the env var read for the GitHub PAT.
+  DOTENV_FILENAME      Name of the dotenv file looked up for the PAT (.env).
+
+CLI flags
+---------
+  --task-ids-file PATH        (required) Text file with one task ID per line.
+                              Blank lines and `#`-comments are ignored.
+                              Duplicate IDs are de-duplicated, order preserved.
+  --aquila-bearer-token TOKEN (required) Bearer token for the Aquila task
+                              lookup endpoint.
+  --output-dir PATH           Per-task output folder (default: task_exports).
+  --work-dir PATH             Scratch dir for clones and extracts
+                              (default: _task_export_work). Removed at end of
+                              run unless --keep-work-dir.
+  --task-url-template URL     Aquila lookup template; supports {task_id} or
+                              {t_id}. Default: production Aquila endpoint.
+  --interactive-validation    On validation failure, prompt: skip / zip-
+                              anyway / retry. Without this flag, failures
+                              abort the task and delete the zip.
+  --min-token-cost-usd FLOAT  Minimum total validator-equivalent token cost
+                              (USD) per task; below this, input_tokens are
+                              randomly added to existing usage records until
+                              the threshold is met. 0 disables. Default: 15.0.
+  --keep-work-dir             Keep the work dir at end of run; useful for
+                              inspecting `<work>/<task>/_validate/validate_extract/`.
+  -v, --verbose               Enable DEBUG-level logging.
+
+Output layout
+-------------
+For each successful task <id>:
+
+  <output-dir>/
+    TASK-<id>/
+      TASK-<id>.zip                    # The validated delivery package.
+      .tmp/                            # Repo's `.tmp/` (if any), kept aside.
+      validation/
+        validation_report.md           # Validator's Markdown report.
+        validation_stdout.log          # Validator stdout.
+        validation_stderr.log          # Validator stderr.
+    report.json                        # Run-level + per-task summary.
+
+Inside `TASK-<id>.zip`, sessions are NOT shipped as a folder. After
+validation passes, `original_sessions/` is replaced with a single zip whose
+name mirrors how Claude Code names project folders -- e.g. for a session
+whose `cwd` is `/home/husen/Desktop/eaglepoint/mindflow/TASK-req-a5bb44e7de20`,
+the inner zip is named:
+
+    -home-husen-Desktop-eaglepoint-mindflow-TASK-req-a5bb44e7de20.zip
+
+The basename is derived from the first non-empty `cwd` found in any session
+JSONL (memory.jsonl is skipped). The sanitization rule matches Claude:
+collapse any run of non-`[A-Za-z0-9._]` characters into a single `-`.
+
+The inner sessions zip is FLAT -- session JSONLs sit at its root, not under
+a wrapper folder.
+
+Validation flow
+---------------
+The flow extracts the just-built TASK zip into
+`<work>/<task>/_validate/validate_extract/` and runs the validator against
+that directory. On the first pass the result is wrapped up; on failure
+behavior depends on `--interactive-validation`:
+
+  Without --interactive-validation (CI mode):
+    - The TASK zip is deleted.
+    - The task is reported as failed with stage="validate".
+    - The validation report and stdout/stderr logs are still persisted.
+
+  With --interactive-validation (manual-fix mode):
+    The user is prompted with three choices:
+
+      [s] skip      - delete the zip, mark failed, move on (same as CI mode).
+      [z] zip       - keep the zip anyway, mark task as success, repackage
+                      from the (possibly hand-edited) extract.
+      [r] retry     - re-run the validator AGAINST THE EXTRACT IN PLACE,
+                      so manual edits to the extracted package
+                      (including `original_sessions/`) are honored without
+                      being clobbered by re-extraction.
+
+    Manual edits should be made under:
+
+        <work>/<task>/_validate/validate_extract/
+
+    Edits to `original_sessions/` survive across retries. On final pass /
+    zip-anyway, the TASK zip is rebuilt from the extract, so manual edits
+    flow into the shipped zip.
+
+metadata.json sync rules
+------------------------
+Prompt sync (sync_metadata_prompt_with_aquila):
+  - If `metadata.json` is missing/unreadable/non-JSON-object, skip.
+  - If Aquila has no `prompt_text`, skip and leave the existing prompt.
+  - Otherwise compare normalized whitespace; overwrite if they differ.
+
+Project info sync (sync_metadata_project_info_with_aquila):
+  Mapping (metadata.json field <- Aquila task field):
+
+    project_type        <- project_type
+    frontend_framework  <- frontend_tech_stack
+    backend_framework   <- backend_stack
+
+  For each mapped field: overwrite when values differ. Aquila list values
+  are joined with ", "; null/empty Aquila values become "none".
+
+  For unmapped fields (`backend_language`, `frontend_language`): leave alone
+  unless they are null/empty, in which case set to "none".
+
+  Cascade: if `backend_framework` is effectively none, force
+  `backend_language` to "none". Same for frontend.
+
+Token cost (ensure_minimum_token_cost)
+--------------------------------------
+Computes the validator-equivalent total cost across all *.jsonl in
+`original_sessions/` (memory.jsonl excluded), using the same dedupe rule as
+the validator (usages sharing the same `message.id` within a single file are
+counted once -- last one wins; anonymous usages count every time). If the
+total is below `--min-token-cost-usd`, randomly bumps `input_tokens` on
+existing usage records (50k-500k per bump) until the threshold is met.
+
+Pricing (per million tokens, USD):
+  input  = 5.00
+  output = 25.00
+  cache_read  = input * 0.10  = 0.50
+  cache_write = input * 1.25  = 6.25
+
+Bumps are seeded by `hash(task_id) & 0xFFFFFFFF` so a given task is
+reproducible across re-runs (within a Python process).
+
+Failure modes (per task)
+------------------------
+A task can fail at any of three stages, recorded in `report.json`:
+
+  stage="fetch"     The Aquila lookup failed or returned no task object.
+  stage="process"   Cloning, downloading, extracting, or any fixup raised.
+  stage="validate"  The validator returned non-zero.
+
+Failed tasks do not abort the run; the script processes the next task.
+
+Exit codes
+----------
+  0  All requested tasks fetched, processed, and validated.
+  2  At least one task failed -- see `report.json`.
+
+Usage
+-----
+Basic run:
+
+    export GITHUB_PAT=ghp_...
+    python export_tasks.py \\
+        --task-ids-file ids.txt \\
+        --aquila-bearer-token "$AQUILA_TOKEN" \\
+        --output-dir task_exports
+
+Verbose with kept work dir (so you can inspect what the validator saw):
+
+    export GITHUB_PAT=ghp_...
+    python export_tasks.py \\
+        --task-ids-file ids.txt \\
+        --aquila-bearer-token "$AQUILA_TOKEN" \\
+        --output-dir task_exports \\
+        --work-dir _task_export_work \\
+        --keep-work-dir -v
+
+Interactive (lets you hand-edit sessions and retry on failure):
+
+    export GITHUB_PAT=ghp_...
+    python export_tasks.py \\
+        --task-ids-file ids.txt \\
+        --aquila-bearer-token "$AQUILA_TOKEN" \\
+        --output-dir task_exports \\
+        --interactive-validation
+
+Override the Aquila endpoint (e.g. local API):
+
+    export GITHUB_PAT=ghp_...
+    python export_tasks.py \\
+        --task-ids-file ids.txt \\
+        --aquila-bearer-token "$AQUILA_TOKEN" \\
+        --task-url-template \\
+            "http://127.0.0.1:8000/api/v1/mindflow-tasks/task-id/{task_id}"
 """
 
 from __future__ import annotations
@@ -19,6 +258,7 @@ import argparse
 import http.cookiejar
 import json
 import logging
+import os
 import random
 import re
 import shutil
@@ -37,8 +277,8 @@ from normalize_sessions_zip import run_original_sessions_dir
 
 
 DEFAULT_TASK_URL_TEMPLATE = "https://api.aquila-core.net/api/v1/mindflow-tasks/mindflow-id/{task_id}"
-AQUILA_BEARER_TOKEN = ""
-GITHUB_PAT = ""
+GITHUB_PAT_ENV_VAR = "GITHUB_PAT"
+DOTENV_FILENAME = ".env"
 GIT_ARTIFACT_NAMES = {
     ".git",
     ".gitignore",
@@ -49,6 +289,61 @@ GIT_ARTIFACT_NAMES = {
 ZIP_NOISE_NAMES = {"__macosx", ".ds_store"}
 
 log = logging.getLogger("export_tasks")
+
+
+def _parse_dotenv(path: Path) -> dict[str, str]:
+    """Minimal KEY=VALUE parser. Ignores blank lines and `#` comments. Strips
+    matching surrounding single/double quotes. Honors `export ` prefixes.
+    """
+    env: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return env
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        env[key] = value
+    return env
+
+
+def load_dotenv_into_environ(start: Path) -> Path | None:
+    """Look for a .env file at `start`, then walk up to filesystem root.
+    Returns the path of the file loaded (the first one found), or None.
+    Existing os.environ entries are NOT overwritten.
+    """
+    candidate_dirs: list[Path] = []
+    seen: set[Path] = set()
+    current = start.resolve()
+    while True:
+        if current in seen:
+            break
+        seen.add(current)
+        candidate_dirs.append(current)
+        if current.parent == current:
+            break
+        current = current.parent
+
+    for directory in candidate_dirs:
+        candidate = directory / DOTENV_FILENAME
+        if not candidate.is_file():
+            continue
+        for key, value in _parse_dotenv(candidate).items():
+            os.environ.setdefault(key, value)
+        return candidate
+    return None
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -240,6 +535,7 @@ PROJECT_FIELDS_TO_NORMALIZE: tuple[str, ...] = (
     "frontend_language",
     "frontend_framework",
     "backend_framework",
+    "database",
 )
 
 
@@ -1079,6 +1375,103 @@ def zip_directory_contents(source_dir: Path, output_zip: Path) -> None:
             zf.write(path, arcname=arcname)
 
 
+def _read_cwd_from_jsonl(path: Path) -> str | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for raw in handle:
+                stripped = raw.strip()
+                if not stripped:
+                    continue
+                try:
+                    payload = json.loads(stripped)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                cwd = payload.get("cwd")
+                if isinstance(cwd, str) and cwd.strip():
+                    return cwd.strip()
+    except OSError as exc:
+        log.warning("sessions-zip: cannot read %s: %s", path, exc)
+    return None
+
+
+def _claude_project_name_from_cwd(cwd: str) -> str:
+    """Match Claude's project folder naming: replace any non-[A-Za-z0-9._] run
+    with a single '-'. An absolute POSIX path /home/husen/foo becomes
+    -home-husen-foo.
+    """
+    return re.sub(r"[^A-Za-z0-9._]+", "-", cwd)
+
+
+def _derive_sessions_zip_basename(sessions_dir: Path) -> str | None:
+    for jsonl in sorted(sessions_dir.rglob("*.jsonl")):
+        if not jsonl.is_file():
+            continue
+        if jsonl.name.lower() == "memory.jsonl":
+            continue
+        cwd = _read_cwd_from_jsonl(jsonl)
+        if cwd:
+            return _claude_project_name_from_cwd(cwd)
+    return None
+
+
+def remove_validator_tmp(extract_root: Path) -> bool:
+    """Delete the `.tmp/` directory the validator creates inside extract_root
+    (it holds validation_report.md, which we already persist to the task's
+    validation/ folder). Returns True if the directory was present.
+    """
+    tmp_path = extract_root / ".tmp"
+    if not tmp_path.exists():
+        return False
+    if tmp_path.is_dir():
+        shutil.rmtree(tmp_path, ignore_errors=True)
+    else:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+    return True
+
+
+def package_sessions_dir_as_zip(extract_root: Path) -> dict[str, Any]:
+    """Replace extract_root/original_sessions/ with a sibling zip whose name is
+    derived from the session's `cwd` field (Claude-project-folder style).
+    """
+    sessions_dir = extract_root / "original_sessions"
+    if not sessions_dir.is_dir():
+        return {"performed": False, "reason": "no_sessions_dir"}
+
+    basename = _derive_sessions_zip_basename(sessions_dir)
+    if not basename:
+        log.warning(
+            "sessions-zip: no `cwd` found in any session JSONL under %s; "
+            "leaving original_sessions/ folder as-is",
+            sessions_dir,
+        )
+        return {"performed": False, "reason": "no_cwd_in_sessions"}
+
+    target_zip = extract_root / f"{basename}.zip"
+    if target_zip.exists():
+        target_zip.unlink()
+    with zipfile.ZipFile(target_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(sessions_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            arcname = path.relative_to(sessions_dir).as_posix()
+            zf.write(path, arcname=arcname)
+
+    shutil.rmtree(sessions_dir)
+    log.info(
+        "sessions-zip: packaged original_sessions/ as %s", target_zip.name
+    )
+    return {
+        "performed": True,
+        "zip_name": target_zip.name,
+        "zip_path": str(target_zip),
+    }
+
+
 VALIDATOR_SCRIPT_NAME = "validate_package_direct_original_sessions.py"
 
 
@@ -1337,6 +1730,7 @@ def process_task(
         validation_scratch_dir / "validate_extract",
     )
     extract_root = _extract_zip_for_validation(zip_path, validation_scratch_dir)
+    sessions_zip_info: dict[str, Any] = {"performed": False, "reason": "not_run"}
 
     try:
         while True:
@@ -1356,8 +1750,18 @@ def process_task(
                     task_id,
                     validation_info["report_path"],
                 )
+                # Replace original_sessions/ with a Claude-project-named zip
+                # before repackaging the final TASK zip.
+                sessions_zip_info = package_sessions_dir_as_zip(extract_root)
+                # Drop the validator's .tmp/ from the extract -- the report is
+                # already persisted under the task's validation/ folder.
+                if remove_validator_tmp(extract_root):
+                    log.debug(
+                        "[%s] removed validator .tmp/ from extract before repackage",
+                        task_id,
+                    )
                 # Repackage from extract_root so any manual edits made during
-                # retry (e.g. to original_sessions/) are reflected in the zip.
+                # retry are reflected in the zip.
                 if zip_path.exists():
                     zip_path.unlink()
                 zip_directory_contents(extract_root, zip_path)
@@ -1409,6 +1813,12 @@ def process_task(
                         "[%s] user chose ZIP-ANYWAY; repackaging extract despite validation failure",
                         task_id,
                     )
+                    sessions_zip_info = package_sessions_dir_as_zip(extract_root)
+                    if remove_validator_tmp(extract_root):
+                        log.debug(
+                            "[%s] removed validator .tmp/ from extract before repackage",
+                            task_id,
+                        )
                     if zip_path.exists():
                         zip_path.unlink()
                     zip_directory_contents(extract_root, zip_path)
@@ -1475,6 +1885,9 @@ def process_task(
         "project_info_sync_fields_changed": project_info_sync.get("fields_changed", []),
         "validation_attempts": validation_attempts,
         "validation_outcome": validation_outcome,
+        "sessions_zip_performed": sessions_zip_info.get("performed", False),
+        "sessions_zip_name": sessions_zip_info.get("zip_name", ""),
+        "sessions_zip_reason": sessions_zip_info.get("reason", ""),
     }
 
 
@@ -1509,6 +1922,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--task-ids-file",
         required=True,
         help="Path to a text file with one task ID per line.",
+    )
+    parser.add_argument(
+        "--aquila-bearer-token",
+        required=True,
+        help="Bearer token for the Aquila task lookup endpoint.",
     )
     parser.add_argument(
         "--interactive-validation",
@@ -1553,10 +1971,23 @@ def main() -> int:
     args = parser.parse_args()
     setup_logging(verbose=args.verbose)
 
-    if not AQUILA_BEARER_TOKEN:
-        parser.error("Set AQUILA_BEARER_TOKEN variable")
-    if not GITHUB_PAT:
-        parser.error("Set GITHUB_PAT variable")
+    aquila_bearer_token = args.aquila_bearer_token.strip()
+    if not aquila_bearer_token:
+        parser.error("--aquila-bearer-token must not be empty")
+
+    dotenv_path = load_dotenv_into_environ(Path.cwd())
+    if dotenv_path is None:
+        dotenv_path = load_dotenv_into_environ(Path(__file__).resolve().parent)
+    if dotenv_path is not None:
+        log.info("Loaded environment from %s", dotenv_path)
+
+    github_pat = os.environ.get(GITHUB_PAT_ENV_VAR, "").strip()
+    if not github_pat:
+        parser.error(
+            f"Environment variable {GITHUB_PAT_ENV_VAR} is not set; "
+            f"export it (or add {GITHUB_PAT_ENV_VAR}=<token> to a {DOTENV_FILENAME} "
+            "file in the current dir or alongside this script) before running."
+        )
 
     work_dir = Path(args.work_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
@@ -1605,7 +2036,7 @@ def main() -> int:
             try:
                 task_url = build_task_url(args.task_url_template, requested_task_id)
                 log.debug("[%s] GET %s", requested_task_id, task_url)
-                task_payload = http_get_json(task_url, AQUILA_BEARER_TOKEN)
+                task_payload = http_get_json(task_url, aquila_bearer_token)
                 task = extract_single_task(task_payload)
                 if not task:
                     raise ValueError("Task payload is empty or not an object")
@@ -1629,7 +2060,7 @@ def main() -> int:
             try:
                 result = process_task(
                     task=task,
-                    github_pat=GITHUB_PAT,
+                    github_pat=github_pat,
                     work_dir=work_dir,
                     output_dir=output_dir,
                     keep_work_dir=args.keep_work_dir,

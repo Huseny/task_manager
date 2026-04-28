@@ -466,40 +466,40 @@ LANGUAGE_GITIGNORE_PATTERNS = {
 }
 
 DIR_VIOLATION_REASONS = {
-    ".vscode": "为本地 IDE 配置目录",
-    ".idea": "为本地 IDE 配置目录",
-    ".codex": "为本地工具目录",
-    ".opencode": "为本地工具目录",
-    "__pycache__": "为 Python 缓存目录",
-    "__pychache__": "为 Python 缓存目录（疑似 __pycache__ 拼写错误）",
-    ".pytest_cache": "为 Python 缓存目录",
-    ".venv": "为 Python 虚拟环境目录",
-    "venv": "为 Python 虚拟环境目录",
-    ".mypy_cache": "为 Python 缓存目录",
-    ".ruff_cache": "为 Python 缓存目录",
-    "htmlcov": "为 Python 覆盖率目录",
-    "node_modules": "位于 Node 依赖目录",
-    ".npm": "为 Node 本地缓存目录",
-    ".pnpm-store": "为 Node 本地缓存目录",
-    ".yarn": "为 Node 本地缓存目录",
-    ".next": "为 Node 构建目录",
-    "coverage": "为覆盖率产物目录",
-    "dist": "为构建产物目录",
-    "build": "为构建产物目录",
-    "target": "为构建产物目录",
-    ".gradle": "为 Gradle 本地目录",
-    ".kotlin": "为 Kotlin 本地目录",
-    "out": "为构建产物目录",
-    "bin": "为构建产物目录",
-    "obj": "为构建产物目录",
-    "debug": "为构建产物目录",
-    "release": "为构建产物目录",
-    ".vs": "为 .NET 本地目录",
-    "testresults": "为测试结果目录",
-    "cmakefiles": "为 C/C++ 构建目录",
-    ".dart_tool": "为 Dart/Flutter 本地缓存目录",
-    ".bundle": "为 Ruby 本地依赖目录",
-    "vendor": "为依赖目录",
+    ".vscode": "is local IDE config directory",
+    ".idea": "is local IDE config directory",
+    ".codex": "is local tool directory",
+    ".opencode": "is local tool directory",
+    "__pycache__": "is Python cache directory",
+    "__pychache__": "is Python cache directory (suspected __pycache__ typo)",
+    ".pytest_cache": "is Python cache directory",
+    ".venv": "is Python virtual environment directory",
+    "venv": "is Python virtual environment directory",
+    ".mypy_cache": "is Python cache directory",
+    ".ruff_cache": "is Python cache directory",
+    "htmlcov": "is Python coverage directory",
+    "node_modules": "located in Node dependencies directory",
+    ".npm": "is Node local cache directory",
+    ".pnpm-store": "is Node local cache directory",
+    ".yarn": "is Node local cache directory",
+    ".next": "is Node build directory",
+    "coverage": "is coverage artifact directory",
+    "dist": "is build artifact directory",
+    "build": "is build artifact directory",
+    "target": "is build artifact directory",
+    ".gradle": "is Gradle local directory",
+    ".kotlin": "is Kotlin local directory",
+    "out": "is build artifact directory",
+    "bin": "is build artifact directory",
+    "obj": "is build artifact directory",
+    "debug": "is build artifact directory",
+    "release": "is build artifact directory",
+    ".vs": "is .NET local directory",
+    "testresults": "is test results directory",
+    "cmakefiles": "is C/C++ build directory",
+    ".dart_tool": "is Dart/Flutter local cache directory",
+    ".bundle": "is Ruby local dependency directory",
+    "vendor": "is dependency directory",
 }
 
 COMPILE_EXEMPT_DIR_NAMES = {
@@ -534,30 +534,30 @@ COMPILE_EXEMPT_FILE_NAMES = {
 }
 
 FILE_VIOLATION_RULES = [
-    (lambda p: p.suffix.lower() == ".pyc", "为 Python 缓存文件"),
-    (lambda p: p.name.lower() == ".coverage", "为覆盖率文件"),
-    (lambda p: p.name.lower() == "coverage.out", "为覆盖率文件"),
-    (lambda p: p.suffix.lower() == ".test", "为测试二进制文件"),
-    (lambda p: p.suffix.lower() in {".class", ".jar", ".war"}, "为 Java/Kotlin 构建产物"),
+    (lambda p: p.suffix.lower() == ".pyc", "is Python cache file"),
+    (lambda p: p.name.lower() == ".coverage", "is coverage file"),
+    (lambda p: p.name.lower() == "coverage.out", "is coverage file"),
+    (lambda p: p.suffix.lower() == ".test", "is test binary file"),
+    (lambda p: p.suffix.lower() in {".class", ".jar", ".war"}, "is Java/Kotlin build artifact"),
     (
         lambda p: p.name.lower() in {"cmakecache.txt", "cmake_install.cmake", "compile_commands.json"},
-        "为 C/C++ 构建文件",
+        "is C/C++ build file",
     ),
-    (lambda p: p.suffix.lower() in {".o", ".obj", ".exe", ".pdb"}, "为二进制/构建产物文件"),
+    (lambda p: p.suffix.lower() in {".o", ".obj", ".exe", ".pdb"}, "is binary/build artifact file"),
     (
         lambda p: p.name.lower() in {".flutter-plugins", ".flutter-plugins-dependencies"},
-        "为 Flutter 本地工具文件",
+        "is Flutter local tool file",
     ),
     (
         lambda p: p.as_posix().lower().endswith("android/local.properties"),
-        "为 Android 本地配置文件",
+        "is Android local config file",
     ),
-    (lambda p: p.suffix.lower() in {".db", ".sqlite", ".sqlite3"}, "为本地数据库文件"),
-    (lambda p: p.suffix.lower() == ".tsbuildinfo", "为 TypeScript 构建缓存文件"),
-    (lambda p: p.name.lower() == "session.json", "为不应交付文件（session.json）"),
+    (lambda p: p.suffix.lower() in {".db", ".sqlite", ".sqlite3"}, "is local database file"),
+    (lambda p: p.suffix.lower() == ".tsbuildinfo", "is TypeScript build cache file"),
+    (lambda p: p.name.lower() == "session.json", "is non-deliverable file (session.json)"),
     (
         lambda p: re.fullmatch(r"rollout-.*\.jsonl", p.name.lower()) is not None,
-        "为不应交付文件（rollout-*.jsonl）",
+        "is non-deliverable file (rollout-*.jsonl)",
     ),
 ]
 
@@ -714,26 +714,26 @@ class PackageValidator:
     def _cleanup_extracted_session_dirs_after_report(self) -> None:
         if not self._session_extracted_dirs_for_cleanup:
             if self._session_skip_cleanup_dirs:
-                print("POST-REPORT-CLEANUP | 无需删除目录（同名预存目录已跳过解压并跳过删除）")
+                print("POST-REPORT-CLEANUP | No directory deletion needed (existing directories with same name skipped decompression and deletion)")
             return
 
         done = 0
         skipped = 0
         failed = 0
 
-        print("POST-REPORT-CLEANUP | 开始清理解压目录（仅清理本次 zip 解压新增目录）")
+        print("POST-REPORT-CLEANUP | Starting cleanup of decompressed directories (only newly decompressed dirs)")
         for path in sorted(self._session_extracted_dirs_for_cleanup.values(), key=lambda p: p.as_posix().lower()):
             key = path.as_posix().lower()
             if key in self._session_skip_cleanup_dirs:
-                print(f"[SKIP] CLEANUP_DIR {self._rel(path)} | 标记为同名预存目录，跳过删除")
+                print(f"[SKIP] CLEANUP_DIR {self._rel(path)} | Marked as existing directory with same name, skipping deletion")
                 skipped += 1
                 continue
             if not path.exists():
-                print(f"[SKIP] CLEANUP_DIR {self._rel(path)} | 目录已不存在")
+                print(f"[SKIP] CLEANUP_DIR {self._rel(path)} | Directory no longer exists")
                 skipped += 1
                 continue
             if not path.is_dir():
-                print(f"[FAIL] CLEANUP_DIR {self._rel(path)} | 目标不是目录")
+                print(f"[FAIL] CLEANUP_DIR {self._rel(path)} | Target is not a directory")
                 failed += 1
                 continue
             try:
@@ -748,31 +748,31 @@ class PackageValidator:
 
     def run_repair(self) -> tuple[int, int, int, Path | None]:
         if self.root is None:
-            print("REPAIR | 输入目录无效，跳过修复")
+            print("REPAIR | Invalid input directory, skipping repair")
             return 0, 0, 0, None
 
-        print("REPAIR | 正在生成修复计划（目录较大时可能耗时）...", flush=True)
+        print("REPAIR | Generating repair plan (might take time for large directories)...", flush=True)
         actions = self._plan_repair_actions()
-        print(f"REPAIR | 修复计划生成完成，共 {len(actions)} 项", flush=True)
+        print(f"REPAIR | Repair plan generated, total {len(actions)} items", flush=True)
         if not actions:
-            print("REPAIR | 无可执行修复操作")
+            print("REPAIR | No executable repair operations")
             return 0, 0, 0, None
 
-        print("REPAIR | 以下为拟执行操作（报告已先生成）:")
+        print("REPAIR | Proposed operations (report already generated):")
         self._print_repair_plan(actions)
 
         try:
-            confirmation = input("确认执行以上修复操作吗？输入 YES 继续，其它任意输入取消: ").strip()
+            confirmation = input("Confirm to execute above repair operations? Enter YES to continue, any other input to cancel: ").strip()
         except EOFError:
             confirmation = ""
 
         if confirmation.upper() != "YES":
-            print("REPAIR | 已取消，未修改任何文件")
+            print("REPAIR | Cancelled, no files modified")
             return 0, len(actions), 0, None
 
         executed, skipped, failed, backup_dir = self._execute_repair_actions(actions)
         if backup_dir is None:
-            print(f"REPAIR | executed={executed} skipped={skipped} failed={failed} | 未生成备份（无删除操作）")
+            print(f"REPAIR | executed={executed} skipped={skipped} failed={failed} | No backup generated (no deletion operations)")
         else:
             print(
                 f"REPAIR | executed={executed} skipped={skipped} failed={failed} | backup={self._rel(backup_dir)}"
@@ -781,31 +781,31 @@ class PackageValidator:
 
     def run_convert_legacy(self) -> tuple[int, int, int, Path | None]:
         if self.root is None:
-            print("CONVERT | 输入目录无效，跳过转换")
+            print("CONVERT | Invalid input directory, skipping conversion")
             return 0, 0, 0, None
 
-        print("CONVERT | 正在生成旧结构迁移计划...", flush=True)
+        print("CONVERT | Generating old structure migration plan...", flush=True)
         actions = self._plan_convert_legacy_actions()
-        print(f"CONVERT | 迁移计划生成完成，共 {len(actions)} 项", flush=True)
+        print(f"CONVERT | Migration plan generated, total {len(actions)} items", flush=True)
         if not actions:
-            print("CONVERT | 无需迁移（未检测到可转换的旧结构）")
+            print("CONVERT | No migration needed (no convertible old structure detected)")
             return 0, 0, 0, None
 
-        print("CONVERT | 以下为拟执行操作:")
+        print("CONVERT | Proposed operations:")
         self._print_repair_plan(actions)
 
         try:
-            confirmation = input("确认执行以上迁移操作吗？输入 YES 继续，其它任意输入取消: ").strip()
+            confirmation = input("Confirm to execute above migration operations? Enter YES to continue, any other input to cancel: ").strip()
         except EOFError:
             confirmation = ""
 
         if confirmation.upper() != "YES":
-            print("CONVERT | 已取消，未修改任何文件")
+            print("CONVERT | Cancelled, no files modified")
             return 0, len(actions), 0, None
 
         executed, skipped, failed, backup_dir = self._execute_repair_actions(actions, backup_on_move=True)
         if backup_dir is None:
-            print(f"CONVERT | executed={executed} skipped={skipped} failed={failed} | 未生成备份")
+            print(f"CONVERT | executed={executed} skipped={skipped} failed={failed} | No backup generated")
         else:
             print(
                 f"CONVERT | executed={executed} skipped={skipped} failed={failed} | backup={self._rel(backup_dir)}"
@@ -851,17 +851,17 @@ class PackageValidator:
             actions.append(RepairAction(kind="delete", src=path_abs, dst=None, reason=reason))
             delete_paths.add(path_abs)
 
-        # 0) 根目录 .gitignore：写入豁免规则（.tmp/.backup/压缩包类型）。
+        # 0) 根目录 .gitignore：写入豁免规则（.tmp/.backup/压缩包类型)。
         actions.append(
             RepairAction(
                 kind="update_gitignore",
                 src=_abs(root / ".gitignore"),
                 dst=None,
-                reason="在根目录 .gitignore 写入豁免规则（.tmp/.backup/压缩包）",
+                reason="Write exemption rules in root .gitignore (.tmp/.backup/archives)",
             )
         )
 
-        # 0.1) 代码目录下 .tmp 合并到根目录 .tmp，并删除源目录。
+        # 0.1) 代码目录下 .tmp 合并到根目录 .tmp, 并删除源目录。
         if self.project_type_dir is not None:
             scoped_tmp = self.project_type_dir / ".tmp"
             if scoped_tmp.is_dir():
@@ -870,15 +870,15 @@ class PackageValidator:
                         kind="merge_tmp_dir",
                         src=_abs(scoped_tmp),
                         dst=_abs(root / ".tmp"),
-                        reason="将代码目录下 .tmp 内容迁移到根目录 .tmp，并删除原目录",
+                        reason="Migrate .tmp content in code directory to root .tmp, and delete original directory",
                     )
                 )
                 _add_delete(
                     scoped_tmp,
-                    "清理代码目录下 .tmp 残留（合并后；若不存在将自动跳过）",
+                    "Clean up .tmp residue in code directory (after merge; if none exists, will automatically skip)",
                 )
 
-        # 1) 根目录必要文件：位置/命名修复，重复与错位删除。
+        # 1) 根目录必要文件：位置/命名修复, 重复与错位删除。
         for required in ROOT_REQUIRED_FILES:
             correct, misplaced, typos = self._collect_required_file_candidates(
                 required,
@@ -888,26 +888,26 @@ class PackageValidator:
 
             if correct:
                 for duplicate in correct[1:]:
-                    _add_delete(duplicate, f"{required} 根目录重复，保留一份")
+                    _add_delete(duplicate, f"{required} duplicate in root directory, keeping one")
                 for wrong in misplaced:
-                    _add_delete(wrong, f"{required} 位置错误，根目录已有正确文件")
+                    _add_delete(wrong, f"{required} location incorrect, correct file already exists in root directory")
                 for typo in typos:
-                    _add_delete(typo, f"{typo.name} 命名错误，根目录已有正确 {required}")
+                    _add_delete(typo, f"{typo.name} naming incorrect, correct one already exists in root directory {required}")
             else:
                 candidates = misplaced + typos
                 if candidates:
                     selected = candidates[0]
-                    _add_move(selected, destination, f"修复 {required} 的位置/命名")
+                    _add_move(selected, destination, f"Repair {required} location/naming")
                     for redundant in candidates[1:]:
-                        _add_delete(redundant, f"{required} 候选重复，保留首个修复来源")
+                        _add_delete(redundant, f"{required} candidates duplicate, keeping first repair source")
 
-        # 1.1) metadata.json 字段补齐（缺失时创建，已有时补全空字段）。
+        # 1.1) metadata.json 字段补齐（缺失时创建, 已有时补全空字段)。
         actions.append(
             RepairAction(
                 kind="upsert_metadata",
                 src=_abs(root / "metadata.json"),
                 dst=None,
-                reason="补齐 metadata.json 必需字段",
+                reason="Fill in metadata.json required fields",
                 options={"mode": "repair"},
             )
         )
@@ -920,24 +920,24 @@ class PackageValidator:
         )
         if docs_dir.is_dir():
             for wrong in misplaced_docs:
-                _add_delete(wrong, "docs/ 错位重复，根目录已有正确 docs/")
+                _add_delete(wrong, "docs/ misplaced duplicate, correct docs/ already exists in root directory")
             for typo in typo_docs:
-                _add_delete(typo, f"{typo.name}/ 命名错误，应为 docs/")
+                _add_delete(typo, f"{typo.name}/ naming incorrect, should be docs/")
         else:
             if misplaced_docs:
                 selected = misplaced_docs[0]
-                _add_move(selected, docs_dir, "修复 docs/ 到根目录")
+                _add_move(selected, docs_dir, "Repair docs/ to root directory")
                 for redundant in misplaced_docs[1:]:
-                    _add_delete(redundant, "docs/ 候选重复，保留首个修复来源")
+                    _add_delete(redundant, "docs/ candidates duplicate, keeping first repair source")
                 for typo in typo_docs:
-                    _add_delete(typo, f"{typo.name}/ 命名错误，已使用 docs/ 候选修复")
+                    _add_delete(typo, f"{typo.name}/ naming incorrect, docs/ candidate used for repair")
             elif typo_docs:
                 selected = typo_docs[0]
-                _add_move(selected, docs_dir, "修复 docs/ 命名并移动到根目录")
+                _add_move(selected, docs_dir, "Repair docs/ naming and move to root directory")
                 for redundant in typo_docs[1:]:
-                    _add_delete(redundant, "docs/ 命名候选重复，保留首个修复来源")
+                    _add_delete(redundant, "docs/ naming candidates duplicate, keeping first repair source")
 
-        # 1.3) docs 必要文档（questions/design/api-spec）归位与命名修复。
+        # 1.3) docs 必要文档（questions/design/api-spec)归位与命名修复。
         def _align_docs_file(required_name: str) -> None:
             destination = docs_dir / required_name
             in_docs, outside_docs, typo_candidates = self._collect_file_candidates_for_target_dir(
@@ -949,27 +949,27 @@ class PackageValidator:
 
             if in_docs:
                 for duplicate in in_docs[1:]:
-                    _add_delete(duplicate, f"docs/{required_name} 重复，保留一份")
+                    _add_delete(duplicate, f"docs/{required_name} duplicate, keeping one")
                 for path in candidates:
-                    _add_delete(path, f"{required_name} 应位于 docs/，删除重复或错位候选")
+                    _add_delete(path, f"{required_name} should be in docs/, deleting duplicates or misplaced candidates")
                 return
 
             if not candidates:
                 return
 
             candidates.sort(key=lambda p: (0 if p.parent == root else 1, p.as_posix().lower()))
-            _add_move(candidates[0], destination, f"修复 {required_name} 到 docs/{required_name}")
+            _add_move(candidates[0], destination, f"Repair {required_name} to docs/{required_name}")
             for redundant in candidates[1:]:
-                _add_delete(redundant, f"{required_name} 候选重复，保留首个修复来源")
+                _add_delete(redundant, f"{required_name} candidates duplicate, keeping first repair source")
 
         _align_docs_file("questions.md")
         _align_docs_file("design.md")
         _align_docs_file("api-spec.md")
 
         for prompt_candidate in self._collect_prompt_file_candidates():
-            _add_delete(prompt_candidate, "prompt.md 已废弃，内容应保存在 metadata.prompt")
+            _add_delete(prompt_candidate, "prompt.md is deprecated, content should be saved in metadata.prompt")
 
-        # 2) 代码目录 repo 修复（兼容旧结构目录）。
+        # 2) 代码目录 repo 修复（兼容旧结构目录)。
         repo_dir = root / REPO_DIR_NAME
         legacy_dirs = list(self.legacy_project_dirs)
         if not repo_dir.is_dir():
@@ -979,12 +979,12 @@ class PackageValidator:
             repo_candidates = sorted(repo_candidates, key=lambda p: p.name.lower())
             if repo_candidates:
                 selected = repo_candidates[0]
-                _add_move(selected, repo_dir, "修复代码目录命名/位置为 repo/")
+                _add_move(selected, repo_dir, "Repair code directory naming/location to repo/")
                 for redundant in repo_candidates[1:]:
-                    _add_delete(redundant, "多余旧结构代码目录，保留一份迁移来源")
+                    _add_delete(redundant, "Extra old structure code directories, keeping one migration source")
         else:
             for _, legacy_dir in legacy_dirs:
-                _add_delete(legacy_dir, "旧结构代码目录冗余，已存在 repo/")
+                _add_delete(legacy_dir, "Old structure code directory redundant, repo/ already exists")
 
         # 3) original_sessions 与旧会话 JSON 文件归位。
         sessions_correct, sessions_misplaced, sessions_typos = self._collect_required_dir_candidates(
@@ -999,19 +999,19 @@ class PackageValidator:
 
         if sessions_correct:
             for duplicate in sessions_correct[1:]:
-                _add_delete(duplicate, f"{ORIGINAL_SESSIONS_DIR_NAME}/ 根目录重复，保留一份")
+                _add_delete(duplicate, f"{ORIGINAL_SESSIONS_DIR_NAME}/ duplicate in root directory, keeping one")
             for wrong in sessions_misplaced:
-                _add_delete(wrong, f"{ORIGINAL_SESSIONS_DIR_NAME}/ 位置错误，根目录已有正确目录")
+                _add_delete(wrong, f"{ORIGINAL_SESSIONS_DIR_NAME}/ location incorrect, correct directory already exists in root directory")
             for typo in sessions_typos:
-                _add_delete(typo, f"{typo.name}/ 命名错误，根目录已有正确 {ORIGINAL_SESSIONS_DIR_NAME}/")
+                _add_delete(typo, f"{typo.name}/ naming incorrect, correct one already exists in root directory {ORIGINAL_SESSIONS_DIR_NAME}/")
         else:
             candidates = sessions_misplaced + sessions_typos
             if candidates:
                 selected = candidates[0]
-                _add_move(selected, sessions_dir, f"修复 {ORIGINAL_SESSIONS_DIR_NAME}/ 到根目录")
+                _add_move(selected, sessions_dir, f"Repair {ORIGINAL_SESSIONS_DIR_NAME}/ to root directory")
                 moved_sessions_src = selected
                 for redundant in candidates[1:]:
-                    _add_delete(redundant, f"{ORIGINAL_SESSIONS_DIR_NAME}/ 候选重复，保留首个修复来源")
+                    _add_delete(redundant, f"{ORIGINAL_SESSIONS_DIR_NAME}/ candidates duplicate, keeping first repair source")
 
         misplaced_session_files = self._collect_misplaced_legacy_session_json_files(sessions_dir)
         for src in misplaced_session_files:
@@ -1022,18 +1022,18 @@ class PackageValidator:
                 except ValueError:
                     pass
             target = self._next_unique_filename_target(sessions_dir, src.name, move_dests)
-            _add_move(src, target, f"旧会话 JSON 文件应迁移到 {ORIGINAL_SESSIONS_DIR_NAME}/（建议后续打包为压缩文件）")
+            _add_move(src, target, f"Old session JSON files should be migrated to {ORIGINAL_SESSIONS_DIR_NAME}/ (suggest packing as archive later)")
 
-        # 4) 根目录额外目录清理（豁免仅影响执行，不影响提醒/计划）。
+        # 4) 根目录额外目录清理（豁免仅影响执 rows, 不影响提醒/计划)。
         allowed_root_dirs = ROOT_STANDARD_DIR_NAMES
         for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
             if not entry.is_dir():
                 continue
             if entry.name in allowed_root_dirs:
                 continue
-            _add_delete(entry, "删除根目录规范外目录")
+            _add_delete(entry, "Delete non-standard directory in root directory")
 
-        # 5) 根目录额外文件清理（豁免仅影响执行，不影响提醒/计划）。
+        # 5) 根目录额外文件清理（豁免仅影响执 rows, 不影响提醒/计划)。
         for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
             if not entry.is_file():
                 continue
@@ -1041,17 +1041,17 @@ class PackageValidator:
                 continue
             if entry.name in ROOT_ALLOWED_FILES:
                 continue
-            _add_delete(entry, "删除根目录规范外文件")
+            _add_delete(entry, "Delete non-standard file in root directory")
 
-        # 6) 修复模式下清理本地脏目录/文件（优先复用校验阶段结果，避免重复全盘扫描）。
+        # 6) 修复模式下清理本地脏目录/文件（优先复用校验阶段结果, 避免重复全盘扫描)。
         if self._dirty_findings_cache is not None:
             for path, reason, status in self._dirty_findings_cache:
                 if status != "FAIL":
                     continue
                 if path.is_dir():
-                    _add_delete(path, f"删除本地脏目录：{reason}")
+                    _add_delete(path, f"Delete local dirty directory: {reason}")
                 else:
-                    _add_delete(path, f"删除本地脏文件：{reason}")
+                    _add_delete(path, f"Delete local dirty file: {reason}")
         else:
             for current_root, dirs, files in os.walk(root, topdown=True):
                 dirs.sort(key=str.lower)
@@ -1069,7 +1069,7 @@ class PackageValidator:
                     reason = self._dir_violation_reason(dirname)
                     if reason:
                         if not self._is_compile_exempt_dir(dirname):
-                            _add_delete(dir_path, f"删除本地脏目录：{reason}")
+                            _add_delete(dir_path, f"Delete local dirty directory: {reason}")
                     else:
                         pruned_dirs.append(dirname)
                 dirs[:] = pruned_dirs
@@ -1082,9 +1082,9 @@ class PackageValidator:
                         continue
                     reason = self._file_violation_reason(file_path)
                     if reason and not self._is_compile_exempt_file(file_path):
-                        _add_delete(file_path, f"删除本地脏文件：{reason}")
+                        _add_delete(file_path, f"Delete local dirty file: {reason}")
 
-        # 删除动作去重：若父目录已删除，则子路径删除动作可省略。
+        # 删除动作去重：若父目录已删除, 则子路径删除动作可省略。
         delete_roots: list[Path] = []
         normalized_actions: list[RepairAction] = []
         for action in actions:
@@ -1156,7 +1156,7 @@ class PackageValidator:
                 )
             )
 
-        # A) docs 目录与核心文档归位（questions/design/api-spec）。
+        # A) docs 目录与核心文档归位（questions/design/api-spec)。
         docs_dir = root / "docs"
         _, misplaced_docs, typo_docs = self._collect_required_dir_candidates(
             "docs",
@@ -1164,22 +1164,22 @@ class PackageValidator:
         )
         if docs_dir.is_dir():
             for wrong in misplaced_docs:
-                _add_delete(wrong, "docs/ 错位重复，根目录已有正确 docs/")
+                _add_delete(wrong, "docs/ misplaced duplicate, correct docs/ already exists in root directory")
             for typo in typo_docs:
-                _add_delete(typo, f"{typo.name}/ 命名错误，应为 docs/")
+                _add_delete(typo, f"{typo.name}/ naming incorrect, should be docs/")
         else:
             if misplaced_docs:
                 selected = misplaced_docs[0]
-                _add_move(selected, docs_dir, "修复 docs/ 到根目录")
+                _add_move(selected, docs_dir, "Repair docs/ to root directory")
                 for redundant in misplaced_docs[1:]:
-                    _add_delete(redundant, "docs/ 候选重复，保留首个修复来源")
+                    _add_delete(redundant, "docs/ candidates duplicate, keeping first repair source")
                 for typo in typo_docs:
-                    _add_delete(typo, f"{typo.name}/ 命名错误，已使用 docs/ 候选修复")
+                    _add_delete(typo, f"{typo.name}/ naming incorrect, docs/ candidate used for repair")
             elif typo_docs:
                 selected = typo_docs[0]
-                _add_move(selected, docs_dir, "修复 docs/ 命名并移动到根目录")
+                _add_move(selected, docs_dir, "Repair docs/ naming and move to root directory")
                 for redundant in typo_docs[1:]:
-                    _add_delete(redundant, "docs/ 命名候选重复，保留首个修复来源")
+                    _add_delete(redundant, "docs/ naming candidates duplicate, keeping first repair source")
 
         def _align_docs_file(required_name: str) -> None:
             destination = docs_dir / required_name
@@ -1192,18 +1192,18 @@ class PackageValidator:
 
             if in_docs:
                 for duplicate in in_docs[1:]:
-                    _add_delete(duplicate, f"docs/{required_name} 重复，保留一份")
+                    _add_delete(duplicate, f"docs/{required_name} duplicate, keeping one")
                 for path in candidates:
-                    _add_delete(path, f"{required_name} 应位于 docs/，删除重复或错位候选")
+                    _add_delete(path, f"{required_name} should be in docs/, deleting duplicates or misplaced candidates")
                 return
 
             if not candidates:
                 return
 
             candidates.sort(key=lambda p: (0 if p.parent == root else 1, p.as_posix().lower()))
-            _add_move(candidates[0], destination, f"修复 {required_name} 到 docs/{required_name}")
+            _add_move(candidates[0], destination, f"Repair {required_name} to docs/{required_name}")
             for redundant in candidates[1:]:
-                _add_delete(redundant, f"{required_name} 候选重复，保留首个修复来源")
+                _add_delete(redundant, f"{required_name} candidates duplicate, keeping first repair source")
 
         _align_docs_file("questions.md")
         _align_docs_file("design.md")
@@ -1223,7 +1223,7 @@ class PackageValidator:
                 source_dir = inferred
 
         if not repo_dir.is_dir() and source_dir is not None and source_dir != repo_dir:
-            _add_move(source_dir, repo_dir, "旧结构代码目录迁移为 repo/")
+            _add_move(source_dir, repo_dir, "Old structure code directory migrated to repo/")
 
         for _, legacy_dir in legacy_dirs:
             if source_dir is not None and legacy_dir == source_dir and not repo_dir.is_dir():
@@ -1231,11 +1231,11 @@ class PackageValidator:
             if repo_dir.is_dir():
                 nested_dst = repo_dir / legacy_dir.name
                 if not nested_dst.exists():
-                    _add_move(legacy_dir, nested_dst, "将残留旧结构目录并入 repo/")
+                    _add_move(legacy_dir, nested_dst, "Merge residual old structure directory into repo/")
                 else:
-                    _add_delete(legacy_dir, "残留旧结构目录与 repo 内容冲突，删除冗余目录")
+                    _add_delete(legacy_dir, "Residual old structure directory conflicts with repo content, deleting redundant directory")
             else:
-                _add_delete(legacy_dir, "多余旧结构代码目录，保留单一迁移来源")
+                _add_delete(legacy_dir, "Extra old structure code directories, keeping single migration source")
 
         # C) original_sessions/ 与旧会话 JSON 文件迁移。
         sessions_dir = root / ORIGINAL_SESSIONS_DIR_NAME
@@ -1249,19 +1249,19 @@ class PackageValidator:
         moved_sessions_src: Path | None = None
         if sessions_correct:
             for duplicate in sessions_correct[1:]:
-                _add_delete(duplicate, f"{ORIGINAL_SESSIONS_DIR_NAME}/ 根目录重复，保留一份")
+                _add_delete(duplicate, f"{ORIGINAL_SESSIONS_DIR_NAME}/ duplicate in root directory, keeping one")
             for wrong in sessions_misplaced:
-                _add_delete(wrong, f"{ORIGINAL_SESSIONS_DIR_NAME}/ 位置错误，根目录已有正确目录")
+                _add_delete(wrong, f"{ORIGINAL_SESSIONS_DIR_NAME}/ location incorrect, correct directory already exists in root directory")
             for typo in sessions_typos:
-                _add_delete(typo, f"{typo.name}/ 命名错误，根目录已有正确 {ORIGINAL_SESSIONS_DIR_NAME}/")
+                _add_delete(typo, f"{typo.name}/ naming incorrect, correct one already exists in root directory {ORIGINAL_SESSIONS_DIR_NAME}/")
         else:
             candidates = sessions_misplaced + sessions_typos
             if candidates:
                 selected = candidates[0]
-                _add_move(selected, sessions_dir, f"修复 {ORIGINAL_SESSIONS_DIR_NAME}/ 到根目录")
+                _add_move(selected, sessions_dir, f"Repair {ORIGINAL_SESSIONS_DIR_NAME}/ to root directory")
                 moved_sessions_src = selected
                 for redundant in candidates[1:]:
-                    _add_delete(redundant, f"{ORIGINAL_SESSIONS_DIR_NAME}/ 候选重复，保留首个修复来源")
+                    _add_delete(redundant, f"{ORIGINAL_SESSIONS_DIR_NAME}/ candidates duplicate, keeping first repair source")
 
         misplaced_session_files = self._collect_misplaced_legacy_session_json_files(sessions_dir)
         for src in misplaced_session_files:
@@ -1272,7 +1272,7 @@ class PackageValidator:
                 except ValueError:
                     pass
             target = self._next_unique_filename_target(sessions_dir, src.name, move_dests)
-            _add_move(src, target, f"旧会话 JSON 文件应迁移到 {ORIGINAL_SESSIONS_DIR_NAME}/（建议后续打包为压缩文件）")
+            _add_move(src, target, f"Old session JSON files should be migrated to {ORIGINAL_SESSIONS_DIR_NAME}/ (suggest packing as archive later)")
 
         # D) metadata.json 迁移/补齐。
         metadata_correct, metadata_misplaced, metadata_typos = self._collect_required_file_candidates(
@@ -1283,32 +1283,32 @@ class PackageValidator:
 
         if metadata_correct:
             for duplicate in metadata_correct[1:]:
-                _add_delete(duplicate, "metadata.json 根目录重复，保留一份")
+                _add_delete(duplicate, "metadata.json duplicate in root directory, keeping one")
             for wrong in metadata_misplaced:
-                _add_delete(wrong, "metadata.json 位置错误，根目录已有正确文件")
+                _add_delete(wrong, "metadata.json location incorrect, correct file already exists in root directory")
             for typo in metadata_typos:
-                _add_delete(typo, f"{typo.name} 命名错误，根目录已有 metadata.json")
+                _add_delete(typo, f"{typo.name} naming incorrect, metadata.json already exists in root directory")
         else:
             candidates = metadata_misplaced + metadata_typos
             if candidates:
-                _add_move(candidates[0], metadata_path, "修复 metadata.json 到根目录")
+                _add_move(candidates[0], metadata_path, "Repair metadata.json to root directory")
                 for redundant in candidates[1:]:
-                    _add_delete(redundant, "metadata.json 候选重复，保留首个修复来源")
+                    _add_delete(redundant, "metadata.json candidates duplicate, keeping first repair source")
 
-        _add_upsert_metadata(metadata_path, "补齐 metadata.json 必需字段", mode="legacy_convert")
+        _add_upsert_metadata(metadata_path, "Fill in metadata.json required fields", mode="legacy_convert")
         for prompt_candidate in self._collect_prompt_file_candidates():
-            _add_delete(prompt_candidate, "prompt.md 已废弃，迁移时将写入 metadata.prompt")
+            _add_delete(prompt_candidate, "prompt.md is deprecated, will be written to metadata.prompt during migration")
 
-        # E) 根目录额外目录清理（豁免仅影响执行，不影响提醒/计划）。
+        # E) 根目录额外目录清理（豁免仅影响执 rows, 不影响提醒/计划)。
         allowed_root_dirs = ROOT_STANDARD_DIR_NAMES
         for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
             if not entry.is_dir():
                 continue
             if entry.name in allowed_root_dirs:
                 continue
-            _add_delete(entry, "删除根目录规范外目录")
+            _add_delete(entry, "Delete non-standard directory in root directory")
 
-        # F) 根目录额外文件清理（豁免仅影响执行，不影响提醒/计划）。
+        # F) 根目录额外文件清理（豁免仅影响执 rows, 不影响提醒/计划)。
         for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
             if not entry.is_file():
                 continue
@@ -1316,9 +1316,9 @@ class PackageValidator:
                 continue
             if entry.name in ROOT_ALLOWED_FILES:
                 continue
-            _add_delete(entry, "删除根目录规范外文件")
+            _add_delete(entry, "Delete non-standard file in root directory")
 
-        # 删除动作去重：若父目录已删除，则子路径删除动作可省略。
+        # 删除动作去重：若父目录已删除, 则子路径删除动作可省略。
         delete_roots: list[Path] = []
         normalized_actions: list[RepairAction] = []
         for action in actions:
@@ -1350,29 +1350,29 @@ class PackageValidator:
 
         try:
             path.relative_to(tmp_dir)
-            return True, "位于 .tmp 目录（豁免删除）"
+            return True, "located in .tmp directory (exempt from deletion)"
         except ValueError:
             pass
 
         try:
             path.relative_to(backup_dir)
-            return True, "位于 .backup 目录（豁免删除）"
+            return True, "located in .backup directory (exempt from deletion)"
         except ValueError:
             pass
 
         if path == tmp_dir:
-            return True, ".tmp 目录（豁免删除）"
+            return True, ".tmp directory (exempt from deletion)"
         if path == backup_dir:
-            return True, ".backup 目录（豁免删除）"
+            return True, ".backup directory (exempt from deletion)"
 
         path_maybe_dir = path.is_dir() or (not path.exists() and path.suffix == "")
         if path_maybe_dir and self._is_compile_exempt_dir(path.name):
-            return True, "编译产物目录（豁免删除，仅提醒）"
+            return True, "Build artifact directory (exempt from deletion, reminder only)"
         if self._is_compile_exempt_file(path):
-            return True, "编译产物文件（豁免删除，仅提醒）"
+            return True, "Build artifact file (exempt from deletion, reminder only)"
 
         if path.parent == root and path.suffix.lower() in ROOT_REPAIR_EXEMPT_ARCHIVE_EXTS:
-            return True, "根目录压缩包（豁免删除）"
+            return True, "Root directory archive (exempt from deletion)"
 
         return False, ""
 
@@ -1538,11 +1538,11 @@ class PackageValidator:
         return suffixes[-1] in SESSION_ARCHIVE_SUFFIXES
 
     def _is_linux_style_session_zip_stem(self, stem: str) -> bool:
-        # Linux 绝对路径（以 / 开头）归一化后通常会以 "-" 开头。
+        # Linux 绝对路径（以 / 开头)归一化后通常会以 "-" 开头。
         return stem.startswith(LEADING_SESSION_ZIP_LINUX_PREFIX)
 
     def _is_windows_style_session_zip_stem(self, stem: str) -> bool:
-        # Windows C 盘路径归一化后通常会以 "C--" 开头（大小写不敏感）。
+        # Windows C 盘路径归一化后通常会以 "C--" 开头（大小写不敏感)。
         return stem.lower().startswith(LEADING_SESSION_ZIP_WINDOWS_PREFIX)
 
     def _is_leading_session_zip_archive(self, path: Path) -> bool:
@@ -1581,7 +1581,7 @@ class PackageValidator:
     def _retry_extract_with_sudo(self, archive_path: Path, destination_dir: Path) -> tuple[bool, str]:
         sudo_bin = shutil.which("sudo")
         if sudo_bin is None:
-            return False, "系统未安装 sudo，无法执行提权重试"
+            return False, "System does not have sudo installed, cannot perform privilege escalation retry"
 
         attempts: list[tuple[str, list[str]]] = []
         unzip_bin = shutil.which("unzip")
@@ -1602,7 +1602,7 @@ class PackageValidator:
             )
 
         if not attempts:
-            return False, "未找到 unzip/bsdtar，无法通过 sudo 完成提权解压"
+            return False, "unzip/bsdtar not found, cannot complete privilege escalation decompression via sudo"
 
         failures: list[str] = []
         for label, command in attempts:
@@ -1616,23 +1616,23 @@ class PackageValidator:
                     timeout=SUDO_RETRY_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired:
-                failures.append(f"{label} 超时: {SUDO_RETRY_TIMEOUT_SECONDS}s")
+                failures.append(f"{label} timeout: {SUDO_RETRY_TIMEOUT_SECONDS}s")
                 continue
             except OSError as exc:
-                failures.append(f"{label} 启动失败: {exc}")
+                failures.append(f"{label} startup failed: {exc}")
                 continue
 
             if proc.returncode == 0:
-                return True, f"{label} 提权重试成功"
+                return True, f"{label} privilege escalation retry succeeded"
 
             stderr_text = self._truncate_subprocess_output(proc.stderr or "")
             stdout_text = self._truncate_subprocess_output(proc.stdout or "")
             if stderr_text:
-                failures.append(f"{label} 失败: {stderr_text}")
+                failures.append(f"{label} failed: {stderr_text}")
             elif stdout_text:
-                failures.append(f"{label} 失败: {stdout_text}")
+                failures.append(f"{label} failed: {stdout_text}")
             else:
-                failures.append(f"{label} 失败: exit_code={proc.returncode}")
+                failures.append(f"{label} failed: exit_code={proc.returncode}")
 
         return False, "；".join(failures)
 
@@ -1641,11 +1641,11 @@ class PackageValidator:
             with zipfile.ZipFile(archive_path, "r") as zf:
                 infos = zf.infolist()
                 if not infos:
-                    return False, "压缩包为空", []
+                    return False, "Archive is empty", []
 
                 broken_member = zf.testzip()
                 if broken_member is not None:
-                    return False, f"压缩包校验失败，损坏成员: {broken_member}", []
+                    return False, f"Archive validation failed, corrupted member: {broken_member}", []
 
                 destination_abs = destination_dir.resolve()
                 top_level_names: set[str] = set()
@@ -1659,14 +1659,14 @@ class PackageValidator:
                     if not parts:
                         continue
                     if any(part == ".." for part in parts):
-                        return False, f"压缩包包含非法路径: {info.filename}", []
+                        return False, f"Archive contains illegal path: {info.filename}", []
                     top_level_names.add(parts[0])
 
                     target = (destination_dir / "/".join(parts)).resolve()
                     try:
                         target.relative_to(destination_abs)
                     except ValueError:
-                        return False, f"压缩包包含越界路径: {info.filename}", []
+                        return False, f"Archive contains out-of-bounds path: {info.filename}", []
 
                 try:
                     zf.extractall(destination_dir)
@@ -1675,11 +1675,11 @@ class PackageValidator:
                         raise
                     retry_ok, retry_detail = self._retry_extract_with_sudo(archive_path, destination_dir)
                     if retry_ok:
-                        return True, f"普通权限解压失败后已重试: {retry_detail}", sorted(top_level_names)
-                    return False, f"普通权限解压失败: {exc}；提权重试失败: {retry_detail}", []
+                        return True, f"Normal privilege decompression failed, retried: {retry_detail}", sorted(top_level_names)
+                    return False, f"Normal privilege decompression failed: {exc}; privilege escalation retry failed: {retry_detail}", []
             if not top_level_names:
-                return False, "压缩包中未检测到有效内容", []
-            return True, "解压成功", sorted(top_level_names)
+                return False, "No valid content detected in archive", []
+            return True, "Decompression successful", sorted(top_level_names)
         except (OSError, RuntimeError, zipfile.BadZipFile, ValueError) as exc:
             return False, str(exc), []
 
@@ -1701,7 +1701,7 @@ class PackageValidator:
             return ""
 
         normalized = text.rstrip()
-        trailing_punct = string.punctuation + "，。！？；：、“”‘’（）【】《》—…"
+        trailing_punct = string.punctuation + ", 。！？；：、“”‘’（)【】《》—…"
         while normalized and normalized[-1] in trailing_punct:
             normalized = normalized[:-1].rstrip()
         return normalized
@@ -1777,7 +1777,7 @@ class PackageValidator:
                 "equal": False,
                 "near_duplicate": False,
                 "similarity": 0.0,
-                "reason": "reference_text 为空或无法提取锚点",
+                "reason": "reference_text empty or unable to extract anchor",
             }
 
         pattern = self._build_loose_pattern(head_anchor, tail_anchor)
@@ -1802,7 +1802,7 @@ class PackageValidator:
                 "reference_diff_preview": diff_info["reference_preview"],
                 "matched_diff_preview": diff_info["matched_preview"],
                 "fallback_full_text": True,
-                "reason": "未在目标文本中找到由头尾锚点界定的候选文本段，已降级为整段相似度判定",
+                "reason": "Candidate text segment bounded by head and tail anchors not found in target text, degraded to full-segment similarity check",
             }
 
         matched_segment = matched.group(0)
@@ -1832,23 +1832,23 @@ class PackageValidator:
         metadata_path = self.root / "metadata.json"
         content = self._read_text(metadata_path)
         if content is None:
-            return None, metadata_path, "metadata.json 不存在或不可读，无法读取 prompt 字段"
+            return None, metadata_path, "metadata.json missing or unreadable, cannot read prompt field"
 
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError as exc:
-            return None, metadata_path, f"metadata.json 不是合法 JSON: {exc.msg}"
+            return None, metadata_path, f"metadata.json is not valid JSON: {exc.msg}"
 
         if not isinstance(parsed, dict):
-            return None, metadata_path, "metadata.json 顶层不是对象，无法读取 prompt 字段"
+            return None, metadata_path, "metadata.json top-level is not object, cannot read prompt field"
 
         prompt_value = parsed.get("prompt")
         if prompt_value is None:
-            return None, metadata_path, "metadata.json 缺少 prompt 字段，无法进行锚点比对"
+            return None, metadata_path, "metadata.json missing prompt field, cannot compare anchors"
 
         prompt_text = prompt_value if isinstance(prompt_value, str) else str(prompt_value)
         if not prompt_text.strip():
-            return None, metadata_path, "metadata.prompt 为空，无法进行锚点比对"
+            return None, metadata_path, "metadata.prompt is empty, cannot compare anchors"
 
         return prompt_text, metadata_path, None
 
@@ -2199,20 +2199,20 @@ class PackageValidator:
     def _evaluate_trajectory_tail_completeness(self, jsonl_path: Path) -> tuple[bool, str]:
         analysis = self._analyze_jsonl_file(jsonl_path)
         if not analysis.readable:
-            return False, "轨迹文件不可读"
+            return False, "Trajectory file unreadable"
 
         if analysis.last_semantic_line is None:
-            return False, "未检测到有效 message 事件"
+            return False, "No valid message event detected"
 
         last_line_no = analysis.last_semantic_line
         last_role = analysis.last_semantic_role or ""
         if last_role != "assistant":
-            return False, f"最后一个 message 事件 role 不是 assistant（行号: {last_line_no}，role={last_role or 'unknown'}）"
+            return False, f"Last message event role is not assistant (Line number: {last_line_no}, role={last_role or 'unknown'})"
 
         if not analysis.last_semantic_has_assistant_text:
-            return False, f"最后一个 message 事件 content 未检测到 type=text（行号: {last_line_no}）"
+            return False, f"Last message event content did not detect type=text (Line number: {last_line_no})"
 
-        return True, f"最后一个 message 事件满足 assistant text 收尾（行号: {last_line_no}）"
+        return True, f"Last message event ends with assistant text (Line number: {last_line_no})"
 
     def _check_latest_trajectory_file_completeness(self, section: CheckSection, bundle_dirs: Iterable[Path]) -> None:
         timestamp_candidates: list[tuple[datetime, str, int, Path]] = []
@@ -2229,7 +2229,7 @@ class PackageValidator:
 
         if not timestamp_candidates:
             section.add_warn(
-                "最新轨迹完整性检查跳过：未在 original_sessions 第一层 jsonl 中找到可用 timestamp",
+                "Latest trajectory integrity check skipped: no usable timestamp found in original_sessions first layer jsonl",
                 self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
             )
             return
@@ -2241,9 +2241,9 @@ class PackageValidator:
         if complete:
             section.add_pass(
                 (
-                    "最新轨迹完整性检查通过 "
-                    f"（目标文件={latest_jsonl.name}，文件内最新 timestamp={latest_raw}，行号={latest_line_no}，"
-                    f"窗口基准时间(UTC)={latest_dt.isoformat()}）: {detail}"
+                    "Latest trajectory integrity check passed "
+                    f"(Target file={latest_jsonl.name}, latest timestamp in file={latest_raw}, Line number={latest_line_no}, "
+                    f"window base time (UTC)={latest_dt.isoformat()}): {detail}"
                 ),
                 self._rel(latest_jsonl),
             )
@@ -2251,9 +2251,9 @@ class PackageValidator:
 
         section.add_fail(
             (
-                "最新轨迹完整性检查失败 "
-                f"（目标文件={latest_jsonl.name}，文件内最新 timestamp={latest_raw}，行号={latest_line_no}，"
-                f"窗口基准时间(UTC)={latest_dt.isoformat()}）: {detail}"
+                "Latest trajectory integrity check failed "
+                f"(Target file={latest_jsonl.name}, latest timestamp in file={latest_raw}, Line number={latest_line_no}, "
+                f"window base time (UTC)={latest_dt.isoformat()}): {detail}"
             ),
             self._rel(latest_jsonl),
         )
@@ -2337,7 +2337,7 @@ class PackageValidator:
         return "" if content is None else str(content)
 
     def _strip_read_tool_line_number_prefixes(self, text: str) -> str:
-        # Read 工具输出常见 `12→` 行号前缀，移除后更接近原始文件文本。
+        # Read 工具输出常见 `12→`  rows号前缀, 移除后更接近原始文件文本。
         return re.sub(r"(?m)^\s*\d+\s*→\s*", "", text)
 
     def _extract_candidate_content_from_user_payload(self, payload: dict[str, object], message: dict[str, object]) -> str:
@@ -2345,7 +2345,7 @@ class PackageValidator:
         fallback = self._stringify_session_message_content(message.get("content"))
         fallback = self._strip_read_tool_line_number_prefixes(fallback)
 
-        # 工具读取文件场景：优先使用 toolUseResult.file.content（原文，无行号）。
+        # 工具读取文件场景：优先使用 toolUseResult.file.content（原文, 无 rows号)。
         tool_use_result = payload.get("toolUseResult")
         if isinstance(tool_use_result, dict):
             file_obj = tool_use_result.get("file")
@@ -2407,7 +2407,7 @@ class PackageValidator:
     ) -> None:
         prompt_text, prompt_source_path, prompt_error = self._read_metadata_prompt_for_session_compare()
         if prompt_error is not None or prompt_text is None:
-            section.add_warn(f"metadata.prompt 锚点比对跳过：{prompt_error}", self._rel(prompt_source_path))
+            section.add_warn(f"metadata.prompt anchor comparison skipped: {prompt_error}", self._rel(prompt_source_path))
             return
 
         timestamp_candidates: list[tuple[tuple[int, str], Path, str, int]] = []
@@ -2424,7 +2424,7 @@ class PackageValidator:
 
         if not timestamp_candidates:
             section.add_warn(
-                "metadata.prompt 锚点比对跳过：未在 original_sessions 第一层 jsonl 中找到可用 timestamp",
+                "metadata.prompt anchor comparison skipped: no usable timestamp found in original_sessions first layer jsonl",
                 self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
             )
             return
@@ -2449,7 +2449,7 @@ class PackageValidator:
 
             skipped_note = ""
             if skipped_exempt_files > 0:
-                skipped_note = f"，已跳过 {skipped_exempt_files} 个仅含豁免 user content 的更早文件"
+                skipped_note = f", skipped {skipped_exempt_files} earlier files containing only exempt user content"
 
             window_start_ts = window_candidates[0][2]
             window_start_line = window_candidates[0][1]
@@ -2475,22 +2475,22 @@ class PackageValidator:
                     best_line_no = candidate_line_no
                     best_timestamp = candidate_timestamp
                     best_diff_index = int(compare_result.get("diff_index", -1))
-                    best_match_mode = "锚点命中" if matched_by_anchor else "锚点未命中（整段相似度）"
+                    best_match_mode = "Anchor matched" if matched_by_anchor else "Anchor not matched (full-segment similarity)"
 
                 if not matched_by_anchor and no_match_reason is None:
-                    no_match_reason = str(compare_result.get("reason", "未命中锚点模式"))
+                    no_match_reason = str(compare_result.get("reason", "Anchor mode not matched"))
 
                 if bool(compare_result.get("near_duplicate")):
-                    pass_mode = "锚点命中" if matched_by_anchor else "锚点未命中（整段相似度兜底）"
+                    pass_mode = "Anchor matched" if matched_by_anchor else "Anchor not matched (full-segment similarity fallback)"
                     section.add_pass(
                         (
-                            "metadata.prompt 锚点比对通过 "
-                            f"（similarity={similarity:.6f} >= threshold={SESSION_PROMPT_SIMILARITY_THRESHOLD:.6f}）"
-                            f"（判定方式={pass_mode}）"
+                            "metadata.prompt anchor comparison passed "
+                            f"（similarity={similarity:.6f} >= threshold={SESSION_PROMPT_SIMILARITY_THRESHOLD:.6f})"
+                            f"(Check method={pass_mode})"
                             " "
-                            f"（目标文件={selected_jsonl.name}，文件首 timestamp={first_timestamp}，文件首 timestamp 行号={first_timestamp_line}，"
-                            f"窗口起始 timestamp={window_start_ts}，窗口起始行号={window_start_line}，"
-                            f"命中行号={candidate_line_no}，窗口候选数={len(window_candidates)}，命中序号={idx}{skipped_note}）"
+                            f"(Target file={selected_jsonl.name}, first timestamp in file={first_timestamp}, first timestamp line number in file={first_timestamp_line}, "
+                            f"window start timestamp={window_start_ts}, window start line number={window_start_line}, "
+                            f"match line number={candidate_line_no}, window candidate count={len(window_candidates)}, match index={idx}{skipped_note})"
                         ),
                         self._rel(selected_jsonl),
                     )
@@ -2499,26 +2499,26 @@ class PackageValidator:
             if best_similarity >= 0 and best_line_no is not None and best_timestamp is not None:
                 diff_note = ""
                 if best_diff_index >= 0:
-                    diff_note = f"，首个差异位置={best_diff_index}"
+                    diff_note = f", first difference position={best_diff_index}"
                 section.add_fail(
                     (
-                        "metadata.prompt 锚点比对失败：相似度不足 "
-                        f"（similarity={best_similarity:.6f} < threshold={SESSION_PROMPT_SIMILARITY_THRESHOLD:.6f}{diff_note}，判定方式={best_match_mode or '未知'}）"
+                        "metadata.prompt anchor comparison failed: insufficient similarity "
+                        f"（similarity={best_similarity:.6f} < threshold={SESSION_PROMPT_SIMILARITY_THRESHOLD:.6f}{diff_note}, check method={best_match_mode or 'Unknown'})"
                         " "
-                        f"（目标文件={selected_jsonl.name}，文件首 timestamp={first_timestamp}，文件首 timestamp 行号={first_timestamp_line}，"
-                        f"窗口起始 timestamp={window_start_ts}，窗口起始行号={window_start_line}，"
-                        f"最佳候选 timestamp={best_timestamp}，最佳候选行号={best_line_no}，窗口候选数={len(window_candidates)}{skipped_note}）"
+                        f"(Target file={selected_jsonl.name}, first timestamp in file={first_timestamp}, first timestamp line number in file={first_timestamp_line}, "
+                        f"window start timestamp={window_start_ts}, window start line number={window_start_line}, "
+                        f"best candidate timestamp={best_timestamp}, best candidate line number={best_line_no}, window candidate count={len(window_candidates)}{skipped_note})"
                     ),
                     self._rel(selected_jsonl),
                 )
                 return
 
-            reason = no_match_reason or "窗口内候选内容均未命中锚点模式"
+            reason = no_match_reason or "No candidate content within window matched anchor mode"
             section.add_fail(
                 (
-                    f"metadata.prompt 锚点比对失败：{reason} "
-                    f"（目标文件={selected_jsonl.name}，文件首 timestamp={first_timestamp}，文件首 timestamp 行号={first_timestamp_line}，"
-                    f"窗口起始 timestamp={window_start_ts}，窗口起始行号={window_start_line}，窗口候选数={len(window_candidates)}{skipped_note}）"
+                    f"metadata.prompt anchor comparison failed: {reason} "
+                    f"(Target file={selected_jsonl.name}, first timestamp in file={first_timestamp}, first timestamp line number in file={first_timestamp_line}, "
+                    f"window start timestamp={window_start_ts}, window start line number={window_start_line}, window candidate count={len(window_candidates)}{skipped_note})"
                 ),
                 self._rel(selected_jsonl),
             )
@@ -2527,15 +2527,15 @@ class PackageValidator:
         if skipped_exempt_files > 0 or skipped_unusable_files > 0:
             section.add_warn(
                 (
-                    "metadata.prompt 锚点比对跳过：未找到可用的 user content；"
-                    f"仅含豁免内容文件={skipped_exempt_files}，不可用文件={skipped_unusable_files}"
+                    "metadata.prompt anchor comparison skipped: no usable user content found; "
+                    f"contains only exempt content files={skipped_exempt_files}, unusable file={skipped_unusable_files}"
                 ),
                 self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
             )
             return
 
         section.add_warn(
-            "metadata.prompt 锚点比对跳过：候选 jsonl 无可用于比对的 user content",
+            "metadata.prompt anchor comparison skipped: candidate jsonl has no usable user content for comparison",
             self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
         )
 
@@ -2563,7 +2563,7 @@ class PackageValidator:
     def _check_original_sessions_jsonl_forbidden_keywords(self, section: CheckSection, sessions_dir: Path) -> None:
         jsonl_files = self._collect_all_original_sessions_jsonl_files(sessions_dir)
         if not jsonl_files:
-            section.add_warn("original_sessions 下未检测到 jsonl 文件，跳过禁止关键词检查", self._rel(sessions_dir))
+            section.add_warn("no jsonl files detected in original_sessions, skipping forbidden keyword check", self._rel(sessions_dir))
             return
 
         findings = 0
@@ -2587,7 +2587,7 @@ class PackageValidator:
                     keyword_lines_map = self._scan_keyword_line_numbers_from_text(content)
 
             if not readable or keyword_lines_map is None:
-                section.add_warn("jsonl 文件不可读，已跳过禁止关键词检查", self._rel(jsonl_path))
+                section.add_warn("jsonl file unreadable, skipped forbidden keyword check", self._rel(jsonl_path))
                 continue
 
             for keyword in ORIGINAL_SESSIONS_JSONL_FORBIDDEN_KEYWORDS:
@@ -2597,12 +2597,12 @@ class PackageValidator:
                 findings += 1
                 formatted = self._format_line_numbers(line_numbers)
                 section.add_fail(
-                    f'检测到禁止关键词 "{keyword}"（行号: {formatted}）',
+                    f'Detected forbidden keyword "{keyword}" (Line number: {formatted})',
                     self._rel(jsonl_path),
                 )
 
         if findings == 0:
-            section.add_pass("original_sessions/*.jsonl 未检测到禁止关键词", self._rel(sessions_dir))
+            section.add_pass("no forbidden keywords detected in original_sessions/*.jsonl", self._rel(sessions_dir))
 
     def _analyze_bundle_token_usage(
         self, bundle_dir: Path
@@ -2668,7 +2668,7 @@ class PackageValidator:
                 unreadable_count,
             ) = self._analyze_bundle_token_usage(bundle_dir)
             if session_jsonl_count == 0:
-                section.add_warn("token 统计跳过：第一层未检测到 jsonl 文件", self._rel(bundle_dir))
+                section.add_warn("token statistics skipped: no jsonl files detected in first layer", self._rel(bundle_dir))
                 continue
 
             checked_bundles += 1
@@ -2685,29 +2685,29 @@ class PackageValidator:
             bundle_cost_usd = self._calc_token_cost_usd(bundle_tokens)
             section.add_pass(
                 (
-                    f"{bundle_dir.name}/ token 统计："
-                    f"session_jsonl={session_jsonl_count}，"
-                    f"subagent_jsonl={subagent_jsonl_count}，"
-                    f"usage_records={usage_record_count:,}，"
-                    f"input={bundle_tokens['input_tokens']:,}，"
-                    f"output={bundle_tokens['output_tokens']:,}，"
-                    f"cache_read={bundle_tokens['cache_read_tokens']:,}，"
-                    f"cache_write={bundle_tokens['cache_write_tokens']:,}，"
-                    f"total={bundle_total_sum:,}，"
-                    f"subagent_total={bundle_sub_sum:,}（{bundle_sub_ratio:.1f}%），"
+                    f"{bundle_dir.name}/ token statistics: "
+                    f"session_jsonl={session_jsonl_count}, "
+                    f"subagent_jsonl={subagent_jsonl_count}, "
+                    f"usage_records={usage_record_count:,}, "
+                    f"input={bundle_tokens['input_tokens']:,}, "
+                    f"output={bundle_tokens['output_tokens']:,}, "
+                    f"cache_read={bundle_tokens['cache_read_tokens']:,}, "
+                    f"cache_write={bundle_tokens['cache_write_tokens']:,}, "
+                    f"total={bundle_total_sum:,}, "
+                    f"subagent_total={bundle_sub_sum:,}（{bundle_sub_ratio:.1f}%), "
                     f"cost_usd=${bundle_cost_usd:,.4f}"
                 ),
                 self._rel(bundle_dir),
             )
             if unreadable_count > 0:
                 section.add_warn(
-                    f"{bundle_dir.name}/ token 统计中有 {unreadable_count} 个 jsonl 不可读，已跳过",
+                    f"{bundle_dir.name}/ token statistics has {unreadable_count} jsonl unreadable, skipped",
                     self._rel(bundle_dir),
                 )
 
         if checked_bundles == 0:
             section.add_warn(
-                "original_sessions token 统计跳过：未在 original_sessions 中检测到可统计的第一层 jsonl",
+                "original_sessions token statistics skipped: no countable first layer jsonl detected in original_sessions",
                 self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
             )
             return
@@ -2721,17 +2721,17 @@ class PackageValidator:
         if checked_bundles > 1:
             section.add_pass(
                 (
-                    "original_sessions token 汇总："
-                    f"bundle={checked_bundles}，"
-                    f"session_jsonl={total_session_files}，"
-                    f"subagent_jsonl={total_subagent_files}，"
-                    f"usage_records={total_usage_records:,}，"
-                    f"input={total_tokens['input_tokens']:,}，"
-                    f"output={total_tokens['output_tokens']:,}，"
-                    f"cache_read={total_tokens['cache_read_tokens']:,}，"
-                    f"cache_write={total_tokens['cache_write_tokens']:,}，"
-                    f"total={overall_total_sum:,}，"
-                    f"subagent_total={overall_sub_sum:,}（{sub_ratio:.1f}%），"
+                    "original_sessions token summary:"
+                    f"bundle={checked_bundles}, "
+                    f"session_jsonl={total_session_files}, "
+                    f"subagent_jsonl={total_subagent_files}, "
+                    f"usage_records={total_usage_records:,}, "
+                    f"input={total_tokens['input_tokens']:,}, "
+                    f"output={total_tokens['output_tokens']:,}, "
+                    f"cache_read={total_tokens['cache_read_tokens']:,}, "
+                    f"cache_write={total_tokens['cache_write_tokens']:,}, "
+                    f"total={overall_total_sum:,}, "
+                    f"subagent_total={overall_sub_sum:,}（{sub_ratio:.1f}%), "
                     f"cost_usd=${overall_cost_usd:,.4f}"
                 ),
                 self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
@@ -2740,25 +2740,25 @@ class PackageValidator:
         if overall_cost_usd < threshold_usd:
             section.add_fail(
                 (
-                    "original_sessions 题目开发成本校验失败："
+                    "original_sessions task development cost check failed: "
                     f"cost_usd=${overall_cost_usd:,.4f} < threshold=${threshold_usd:,.2f}"
-                    f"（project_type={threshold_project_type}）"
+                    f"（project_type={threshold_project_type})"
                 ),
                 self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
             )
         else:
             section.add_pass(
                 (
-                    "original_sessions 题目开发成本校验通过："
+                    "original_sessions task development cost check passed: "
                     f"cost_usd=${overall_cost_usd:,.4f} >= threshold=${threshold_usd:,.2f}"
-                    f"（project_type={threshold_project_type}）"
+                    f"（project_type={threshold_project_type})"
                 ),
                 self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
             )
 
         if total_unreadable_files > 0:
             section.add_warn(
-                f"original_sessions token 汇总中有 {total_unreadable_files} 个 jsonl 不可读，已跳过",
+                f"original_sessions token summary contains {total_unreadable_files} jsonl unreadable, skipped",
                 self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
             )
 
@@ -2771,18 +2771,18 @@ class PackageValidator:
         for exempt_dir in exempt_child_dirs:
             if exempt_dir.name.lower() == "memory":
                 section.add_pass(
-                    f"{bundle_dir.name}/ 下 memory/ 已豁免：不做内容检查，也不要求 memory.jsonl 对齐",
+                    f"{bundle_dir.name}/ memory/ is exempt: no content check, no memory.jsonl alignment required",
                     self._rel(exempt_dir),
                 )
 
         if not session_dirs:
             if exempt_child_dirs:
                 section.add_pass(
-                    f"{bundle_dir.name}/ 下未检测到需校验的 session_id 子目录（豁免目录已跳过）",
+                    f"{bundle_dir.name}/ no session_id subdirectories to check detected (exempt dirs skipped)",
                     self._rel(bundle_dir),
                 )
             else:
-                section.add_warn(f"{bundle_dir.name}/ 下未检测到 session_id 子目录", self._rel(bundle_dir))
+                section.add_warn(f"{bundle_dir.name}/ no session_id subdirectories detected", self._rel(bundle_dir))
             return
 
         for session_dir in session_dirs:
@@ -2790,7 +2790,7 @@ class PackageValidator:
             required_jsonl = bundle_dir / f"{session_id}.jsonl"
             if not required_jsonl.is_file():
                 section.add_fail(
-                    f"{bundle_dir.name}/ 中目录 {session_id}/ 缺少同名会话文件 {session_id}.jsonl",
+                    f"{bundle_dir.name}/ directory {session_id}/ missing session file with same name {session_id}.jsonl",
                     self._rel(session_dir),
                 )
                 bundle_failures += 1
@@ -2798,7 +2798,7 @@ class PackageValidator:
             subagents_dir = session_dir / "subagents"
             if not subagents_dir.is_dir():
                 section.add_pass(
-                    f"{session_id}/ 未检测到 subagents/（该目录可选，已跳过该项校验）",
+                    f"{session_id}/ no subagents/ detected (directory is optional, skipped)",
                     self._rel(session_dir),
                 )
                 continue
@@ -2818,13 +2818,13 @@ class PackageValidator:
                 expected_meta = subagents_dir / f"{stem}.meta.json"
                 if not expected_meta.is_file():
                     section.add_fail(
-                        f"{jsonl_file.name} 缺少对应元数据文件 {expected_meta.name}",
+                        f"{jsonl_file.name} missing corresponding metadata file {expected_meta.name}",
                         self._rel(jsonl_file),
                     )
                     bundle_failures += 1
 
         if bundle_failures == 0:
-            section.add_pass(f"{bundle_dir.name}/ 子目录结构检查通过", self._rel(bundle_dir))
+            section.add_pass(f"{bundle_dir.name}/ subdirectory structure check passed", self._rel(bundle_dir))
 
     def _is_original_sessions_memory_exempt_path(self, path: Path) -> bool:
         if self.root is None:
@@ -2891,16 +2891,16 @@ class PackageValidator:
         current: dict[str, object] = {}
         if path.exists():
             if path.is_dir():
-                return "FAIL", "metadata.json 路径为目录，无法写入"
+                return "FAIL", "metadata.json path is a directory, cannot write"
             content = self._read_text(path)
             if content is None:
-                return "FAIL", "metadata.json 非可读文本，无法自动补齐"
+                return "FAIL", "metadata.json is unreadable text, cannot auto-complete"
             try:
                 parsed = json.loads(content)
             except json.JSONDecodeError as exc:
-                return "FAIL", f"metadata.json 非法 JSON: {exc.msg}"
+                return "FAIL", f"metadata.json invalid JSON: {exc.msg}"
             if not isinstance(parsed, dict):
-                return "FAIL", "metadata.json 顶层不是对象，无法自动补齐"
+                return "FAIL", "metadata.json top-level is not object, cannot auto-complete"
             current = dict(parsed)
 
         defaults = self._build_metadata_defaults(current)
@@ -2950,7 +2950,7 @@ class PackageValidator:
                     changed_keys.append(key)
 
         if not changed_keys and path.exists():
-            return "SKIP", "metadata.json 必需字段已完整"
+            return "SKIP", "metadata.json required fields complete"
 
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -2961,9 +2961,9 @@ class PackageValidator:
         if changed_keys:
             prompt_note = ""
             if prompt_source is not None and "prompt" in changed_keys:
-                prompt_note = f"；prompt 来源: {self._rel(prompt_source)}"
-            return "DONE", "补齐字段: " + ", ".join(changed_keys) + prompt_note
-        return "DONE", "创建 metadata.json"
+                prompt_note = f"; prompt source: {self._rel(prompt_source)}"
+            return "DONE", "Fill in field: " + ", ".join(changed_keys) + prompt_note
+        return "DONE", "Create metadata.json"
 
     def _execute_repair_actions(
         self,
@@ -3021,14 +3021,14 @@ class PackageValidator:
 
             if action.kind == "update_gitignore":
                 if src.exists() and src.is_dir():
-                    print(f"[FAIL] UPDATE {self._rel(src)} | 目标是目录，无法写入 .gitignore")
+                    print(f"[FAIL] UPDATE {self._rel(src)} | Target is a directory, cannot write to .gitignore")
                     failed += 1
                     continue
 
                 if src.exists():
                     content = self._read_text(src)
                     if content is None:
-                        print(f"[FAIL] UPDATE {self._rel(src)} | .gitignore 非可读文本，无法自动更新")
+                        print(f"[FAIL] UPDATE {self._rel(src)} | .gitignore is unreadable, cannot update automatically")
                         failed += 1
                         continue
                 else:
@@ -3036,7 +3036,7 @@ class PackageValidator:
 
                 updated_content, additions = self._build_gitignore_content_with_exemptions(content)
                 if not additions:
-                    print(f"[SKIP] UPDATE {self._rel(src)} | 豁免规则已存在")
+                    print(f"[SKIP] UPDATE {self._rel(src)} | Exemption rule already exists")
                     skipped += 1
                     continue
 
@@ -3044,7 +3044,7 @@ class PackageValidator:
                     src.parent.mkdir(parents=True, exist_ok=True)
                     src.write_text(updated_content, encoding="utf-8")
                     print(
-                        f"[DONE] UPDATE {self._rel(src)} | 新增规则: {', '.join(additions)}"
+                        f"[DONE] UPDATE {self._rel(src)} | Added rule: {', '.join(additions)}"
                     )
                     executed += 1
                 except OSError as exc:
@@ -3056,11 +3056,11 @@ class PackageValidator:
                 merge_src = src
                 merge_dst = dst if dst is not None else (root / ".tmp")
                 if not merge_src.exists():
-                    print(f"[SKIP] MERGE_TMP {self._rel(merge_src)} -> {self._rel(merge_dst)} | 源目录不存在")
+                    print(f"[SKIP] MERGE_TMP {self._rel(merge_src)} -> {self._rel(merge_dst)} | Source directory does not exist")
                     skipped += 1
                     continue
                 if not merge_src.is_dir():
-                    print(f"[FAIL] MERGE_TMP {self._rel(merge_src)} | 源路径不是目录")
+                    print(f"[FAIL] MERGE_TMP {self._rel(merge_src)} | Source path is not a directory")
                     failed += 1
                     continue
 
@@ -3110,7 +3110,7 @@ class PackageValidator:
                     continue
 
                 if not src.exists():
-                    print(f"[SKIP] DELETE {self._rel(src)} | 源路径不存在")
+                    print(f"[SKIP] DELETE {self._rel(src)} | Source path does not exist")
                     skipped += 1
                     continue
 
@@ -3128,17 +3128,17 @@ class PackageValidator:
                 continue
 
             if dst is None:
-                print(f"[SKIP] {action.kind.upper()} {self._rel(src)} | 目标路径为空")
+                print(f"[SKIP] {action.kind.upper()} {self._rel(src)} | Target path is empty")
                 skipped += 1
                 continue
 
             if not src.exists():
-                print(f"[SKIP] {action.kind.upper()} {self._rel(src)} -> {self._rel(dst)} | 源路径不存在")
+                print(f"[SKIP] {action.kind.upper()} {self._rel(src)} -> {self._rel(dst)} | Source path does not exist")
                 skipped += 1
                 continue
 
             if dst.exists():
-                print(f"[SKIP] {action.kind.upper()} {self._rel(src)} -> {self._rel(dst)} | 目标已存在")
+                print(f"[SKIP] {action.kind.upper()} {self._rel(src)} -> {self._rel(dst)} | Target already exists")
                 skipped += 1
                 continue
 
@@ -3188,11 +3188,11 @@ class PackageValidator:
         return None
 
     def _check_input_directory(self) -> None:
-        section = self._new_section("1. 输入目录检查")
+        section = self._new_section("1. Input Directory Check")
         resolved = self._resolve_input_directory()
         if resolved is None:
             section.add_fail(
-                f"输入目录不存在或不可访问: {self.input_identifier}",
+                f"Input directory does not exist or is inaccessible: {self.input_identifier}",
                 self.input_identifier,
             )
             self._record_failures()
@@ -3202,7 +3202,7 @@ class PackageValidator:
         self._gitignore_scopes_cache = None
         self._candidate_entries_cache = None
         self._dirty_findings_cache = None
-        section.add_pass("输入目录合法", self._rel(resolved))
+        section.add_pass("Input directory is valid", self._rel(resolved))
         self._record_failures()
 
     def _is_similar_filename(self, candidate_name: str, expected_name: str) -> bool:
@@ -3421,11 +3421,11 @@ class PackageValidator:
         correct, misplaced, typo_candidates = self._collect_required_file_candidates(expected_name, typo_aliases)
 
         if len(correct) == 1:
-            section.add_pass(f"根目录存在 {expected_name}", self._rel(correct[0]))
+            section.add_pass(f"Root directory has {expected_name}", self._rel(correct[0]))
         elif len(correct) > 1:
-            section.add_fail(f"{expected_name} 在根目录出现多份，仅允许 1 份", self._rel(correct[0]))
+            section.add_fail(f"{expected_name} appears multiple times in root directory, only 1 allowed", self._rel(correct[0]))
             for dup in correct[1:max_items]:
-                section.add_fail(f"{expected_name} 重复出现（根目录不应有多份）", self._rel(dup))
+                section.add_fail(f"{expected_name} appears repeatedly (root directory should not have multiples)", self._rel(dup))
                 explained_paths.add(dup)
 
         if misplaced:
@@ -3433,12 +3433,12 @@ class PackageValidator:
                 parent = self._rel(path.parent)
                 if correct:
                     section.add_fail(
-                        f"{expected_name} 位置错误：根目录已存在正确文件，该文件不应再放在 {parent}/",
+                        f"{expected_name} location incorrect: correct file already exists in root directory, this file should not be placed in {parent}/",
                         self._rel(path),
                     )
                 else:
                     section.add_fail(
-                        f"{expected_name} 放置位置错误，应放在 TASK 根目录而不是 {parent}/",
+                        f"{expected_name} placed incorrectly, should be in TASK root directory instead of {parent}/",
                         self._rel(path),
                     )
                 explained_paths.add(path)
@@ -3448,18 +3448,18 @@ class PackageValidator:
                 parent = self._rel(path.parent)
                 if path.parent == self.root:
                     section.add_fail(
-                        f"{path.name} 命名错误，应命名为 {expected_name}（应位于 TASK 根目录）",
+                        f"{path.name} naming incorrect, should be named {expected_name} (Should be in TASK root directory)",
                         self._rel(path),
                     )
                 else:
                     section.add_fail(
-                        f"{path.name} 命名错误，应命名为 {expected_name}，并应放在 TASK 根目录而不是 {parent}/",
+                        f"{path.name} naming incorrect, should be named {expected_name}, and should be in TASK root directory instead of {parent}/",
                         self._rel(path),
                     )
                 explained_paths.add(path)
 
         if not correct and not misplaced and not typo_candidates:
-            section.add_fail(f"缺少 {expected_name}", expected_name)
+            section.add_fail(f"Missing {expected_name}", expected_name)
 
         return explained_paths
 
@@ -3481,20 +3481,20 @@ class PackageValidator:
             sessions_typos = self._filter_original_sessions_candidates(sessions_typos)
 
         if sessions_correct:
-            section.add_pass(f"根目录存在 {ORIGINAL_SESSIONS_DIR_NAME}/ 目录", self._rel(sessions_correct[0]))
+            section.add_pass(f"Root directory has {ORIGINAL_SESSIONS_DIR_NAME}/ directory", self._rel(sessions_correct[0]))
         if len(sessions_correct) > 1:
             section.add_fail(
-                f"{ORIGINAL_SESSIONS_DIR_NAME}/ 在根目录出现多份，仅允许 1 份",
+                f"{ORIGINAL_SESSIONS_DIR_NAME}/ appears multiple times in root directory, only 1 allowed",
                 self._rel(sessions_correct[0]),
             )
             for path in sessions_correct[1:6]:
-                section.add_fail(f"{ORIGINAL_SESSIONS_DIR_NAME}/ 重复出现（根目录不应有多份）", self._rel(path))
+                section.add_fail(f"{ORIGINAL_SESSIONS_DIR_NAME}/ appears repeatedly (root directory should not have multiples)", self._rel(path))
                 explained_paths.add(path)
 
         if legacy_traj_root:
             for path in legacy_traj_root[:6]:
                 section.add_fail(
-                    f"根目录不应存在 trajectory.json，应迁移到 {ORIGINAL_SESSIONS_DIR_NAME}/（建议打包为压缩文件）",
+                    f"Root directory should not have trajectory.json, should be migrated to {ORIGINAL_SESSIONS_DIR_NAME}/ (suggest packing as archive)",
                     self._rel(path),
                 )
                 explained_paths.add(path)
@@ -3502,7 +3502,7 @@ class PackageValidator:
         for path in legacy_traj_misplaced[:6]:
             parent = self._rel(path.parent)
             section.add_fail(
-                f"trajectory.json 为旧命名文件，应迁移到 {ORIGINAL_SESSIONS_DIR_NAME}/（当前位于 {parent}/）",
+                f"trajectory.json is old naming file, should be migrated to {ORIGINAL_SESSIONS_DIR_NAME}/ (currently located at {parent}/)",
                 self._rel(path),
             )
             explained_paths.add(path)
@@ -3510,7 +3510,7 @@ class PackageValidator:
         for path in legacy_traj_typos[:6]:
             parent = self._rel(path.parent)
             section.add_fail(
-                f"{path.name} 属于旧命名风格，应迁移到 {ORIGINAL_SESSIONS_DIR_NAME}/（当前位于 {parent}/）",
+                f"{path.name} belongs to old naming style, should be migrated to {ORIGINAL_SESSIONS_DIR_NAME}/ (currently located at {parent}/)",
                 self._rel(path),
             )
             explained_paths.add(path)
@@ -3518,7 +3518,7 @@ class PackageValidator:
         for path in sessions_misplaced[:6]:
             parent = self._rel(path.parent)
             section.add_fail(
-                f"{ORIGINAL_SESSIONS_DIR_NAME}/ 位置错误，应放在 TASK 根目录而不是 {parent}/",
+                f"{ORIGINAL_SESSIONS_DIR_NAME}/ location incorrect, should be in TASK root directory instead of {parent}/",
                 self._rel(path),
             )
             explained_paths.add(path)
@@ -3526,7 +3526,7 @@ class PackageValidator:
         for path in sessions_typos[:6]:
             parent = self._rel(path.parent)
             section.add_fail(
-                f"{path.name}/ 命名错误，应命名为 {ORIGINAL_SESSIONS_DIR_NAME}/，并放在 TASK 根目录（当前位于 {parent}/）",
+                f"{path.name}/ naming incorrect, should be named {ORIGINAL_SESSIONS_DIR_NAME}/, and place in TASK root directory (currently at {parent}/)",
                 self._rel(path),
             )
             explained_paths.add(path)
@@ -3545,14 +3545,14 @@ class PackageValidator:
                 continue
             parent = self._rel(path.parent)
             section.add_fail(
-                f"检测到旧会话 JSON 文件，应迁移到 {ORIGINAL_SESSIONS_DIR_NAME}/（当前位于 {parent}/）",
+                f"Detected old session JSON file, should be migrated to {ORIGINAL_SESSIONS_DIR_NAME}/ (currently located at {parent}/)",
                 self._rel(path),
             )
             explained_paths.add(path)
 
         if not sessions_correct and not sessions_misplaced and not sessions_typos:
             section.add_fail(
-                f"缺少 {ORIGINAL_SESSIONS_DIR_NAME}/ 目录（会话归档应统一放在该目录）",
+                f"Missing {ORIGINAL_SESSIONS_DIR_NAME}/ directory (sessions should be unified here)",
                 f"{ORIGINAL_SESSIONS_DIR_NAME}/",
             )
 
@@ -3563,29 +3563,29 @@ class PackageValidator:
         deprecated_prompt_names = set(ROOT_REQUIRED_FILE_TYPO_ALIASES.get("prompt.md", set())) | {"prompt.md"}
 
         if name_lower in deprecated_prompt_names:
-            return "prompt.md 已废弃，请将内容放入 metadata.json 的 prompt 字段"
+            return "prompt.md is deprecated, please put content into metadata.json prompt field"
 
         question_names = set(ROOT_REQUIRED_FILE_TYPO_ALIASES.get("questions.md", set())) | {"questions.md"}
         if name_lower in question_names:
-            return "questions.md 位置错误，应放在 docs/questions.md"
+            return "questions.md location incorrect, should be in docs/questions.md"
 
         typo_target = ROOT_COMMON_FILE_TYPOS.get(name_lower)
         if typo_target:
-            return f"根目录文件名疑似错误，建议重命名为 {typo_target}"
+            return f"Root directory filename suspected error, suggest renaming to {typo_target}"
 
         if name_lower == "trajectory.json":
-            return f"根目录不应存在 trajectory.json，应迁移到 {ORIGINAL_SESSIONS_DIR_NAME}/（建议打包为压缩文件）"
+            return f"Root directory should not have trajectory.json, should be migrated to {ORIGINAL_SESSIONS_DIR_NAME}/ (suggest packing as archive)"
 
         if LEGACY_SESSION_JSON_RE.fullmatch(name_lower):
-            return f"根目录不应存在旧会话 JSON 文件，应迁移到 {ORIGINAL_SESSIONS_DIR_NAME}/（建议打包为压缩文件）"
+            return f"Root directory should not have old session JSON files, should be migrated to {ORIGINAL_SESSIONS_DIR_NAME}/ (suggest packing as archive)"
 
         if name_lower == "readme.md":
-            return "readme.md 位置错误，应放在 repo 目录下"
+            return "readme.md location incorrect, should be in repo directory"
 
-        return "根目录存在不允许的额外文件"
+        return "Root directory has disallowed extra files"
 
     def _check_root_fixed_files(self) -> None:
-        section = self._new_section("2. 根目录固定文件检查")
+        section = self._new_section("2. Root Directory Fixed File Check")
         assert self.root is not None
 
         explained_root_files: set[Path] = set()
@@ -3617,12 +3617,12 @@ class PackageValidator:
             for path in sorted(extra_root_files, key=lambda p: p.name.lower()):
                 section.add_fail(self._root_extra_file_issue_message(path), self._rel(path))
         elif not any(item.status == "FAIL" for item in section.items):
-            section.add_pass("根目录不存在规范外额外文件", ".")
+            section.add_pass("Root directory has no non-standard extra files", ".")
 
         self._record_failures()
 
     def _check_repo_directory(self) -> None:
-        section = self._new_section("3. 代码目录检查")
+        section = self._new_section("3. Code Directory Check")
         assert self.root is not None
 
         repo_dir = self.root / REPO_DIR_NAME
@@ -3631,11 +3631,11 @@ class PackageValidator:
 
         if repo_dir.is_dir():
             self.project_type_dir = repo_dir
-            section.add_pass("代码目录存在且命名合规: repo/", self._rel(repo_dir))
+            section.add_pass("Code directory exists and naming is compliant: repo/", self._rel(repo_dir))
             if self.legacy_project_dirs:
                 legacy_desc = ", ".join(path.name for _, path in self.legacy_project_dirs[:5])
                 section.add_warn(
-                    "检测到旧版项目类型目录，建议执行 --convert-legacy 迁移为 repo 结构",
+                    "Detected old project type directory, suggest executing --convert-legacy to migrate to repo structure",
                     legacy_desc,
                 )
         else:
@@ -3644,7 +3644,7 @@ class PackageValidator:
                 self.project_type_dir = legacy_dir
                 self.project_type_name = legacy_type
                 section.add_fail(
-                    f"代码目录命名不合规：应使用 repo/，当前为旧结构目录 {legacy_dir.name}（已按该目录继续后续检查）",
+                    f"Code directory naming non-compliant: should use repo/, currently old structure directory {legacy_dir.name} (Continuing subsequent checks with this directory)",
                     self._rel(legacy_dir),
                 )
                 report_hints = False
@@ -3653,7 +3653,7 @@ class PackageValidator:
                 self.project_type_name = self.legacy_project_dirs[0][0]
                 found_desc = ", ".join(f"{path.name} -> {canonical}" for canonical, path in self.legacy_project_dirs)
                 section.add_fail(
-                    f"缺少 repo/，且检测到多个旧结构代码目录，不合规: {found_desc}",
+                    f"Missing repo/, and detected multiple old structure code directories, non-compliant: {found_desc}",
                     ".",
                 )
                 report_hints = False
@@ -3662,11 +3662,11 @@ class PackageValidator:
                 if inferred is not None:
                     self.project_type_dir = inferred
                     section.add_fail(
-                        f"代码目录命名不合规：应使用 repo/，当前目录为 {inferred.name}（已按该目录继续后续检查）",
+                        f"Code directory naming non-compliant: should use repo/, currently directory is {inferred.name} (Continuing subsequent checks with this directory)",
                         self._rel(inferred),
                     )
                 else:
-                    section.add_fail("缺少代码目录 repo/", "repo/")
+                    section.add_fail("Missing code directory repo/", "repo/")
 
         if report_hints:
             for message, path in self._collect_repo_root_hints():
@@ -3683,16 +3683,16 @@ class PackageValidator:
         typo_readmes = self._find_readme_typo_candidates(project_dir)
 
         if len(root_readmes) == 1:
-            section.add_pass("代码目录存在 readme.md（建议项）", self._rel(root_readmes[0]))
+            section.add_pass("Code directory has readme.md (recommended)", self._rel(root_readmes[0]))
         elif len(root_readmes) > 1:
-            section.add_warn("repo 目录下 readme.md 出现多份，建议仅保留 1 份", self._rel(root_readmes[0]))
+            section.add_warn("multiple copies of readme.md in repo directory, suggest keeping only 1 copy", self._rel(root_readmes[0]))
             for path in root_readmes[1:6]:
-                section.add_warn("readme.md 重复出现（建议清理多余副本）", self._rel(path))
+                section.add_warn("readme.md appears repeatedly (suggest cleaning up extra copies)", self._rel(path))
 
         if misplaced_readmes:
             for path in misplaced_readmes[:6]:
                 section.add_warn(
-                    "检测到 readme.md 放在 repo 外部（建议迁移到 repo/）",
+                    "Detected readme.md outside of repo (suggest migrating to repo/)",
                     self._rel(path),
                 )
 
@@ -3700,12 +3700,12 @@ class PackageValidator:
             for path in typo_readmes[:6]:
                 parent = self._rel(path.parent)
                 section.add_warn(
-                    f"{path.name} 命名疑似不规范，建议使用 readme.md 并放在 repo 目录（当前位于 {parent}/）",
+                    f"{path.name} naming seems non-standard, suggest using readme.md and placing in repo directory (currently at {parent}/)",
                     self._rel(path),
                 )
 
         if not root_readmes and not misplaced_readmes and not typo_readmes:
-            section.add_warn("代码目录未检测到 readme.md（建议提供）", self._rel(project_dir / "readme.md"))
+            section.add_warn("Code directory missing readme.md (suggest providing)", self._rel(project_dir / "readme.md"))
 
     def _collect_legacy_project_directories(self, root: Path) -> list[tuple[str, Path]]:
         matches: list[tuple[str, Path]] = []
@@ -3742,21 +3742,21 @@ class PackageValidator:
             normalized = _normalize_project_type_token(entry.name)
             if normalized in PROJECT_TYPE_LOOKUP:
                 _add_hint(
-                    f"检测到旧结构目录 {entry.name}，新规范应统一为 repo/ 代码目录",
+                    f"Detected old structure directory {entry.name}, new specification should be unified as repo/ code directory",
                     entry,
                 )
                 continue
             suggested = PROJECT_TYPE_MISNAME_HINTS.get(normalized)
             if suggested is not None:
                 _add_hint(
-                    f"检测到目录 {entry.name} 疑似代码目录，建议迁移到 repo/（旧结构建议名: {suggested}）",
+                    f"Detected directory {entry.name} suspected code directory, suggest migrating to repo/ (old structure suggested name: {suggested})",
                     entry,
                 )
                 continue
 
             if normalized in {"backend", "server", "api", "service", "frontend", "web", "client", "ui"}:
                 _add_hint(
-                    f"检测到 {entry.name} 位于根目录，代码目录应统一为 repo/，该目录应位于 repo/ 内",
+                    f"Detected {entry.name} is in root directory, code directories should be under repo/, this directory should be inside repo/",
                     entry,
                 )
 
@@ -3831,13 +3831,13 @@ class PackageValidator:
         return candidates[:max_items]
 
     def _check_trajectory_organization(self) -> None:
-        section = self._new_section("4. original_sessions 文件组织检查")
+        section = self._new_section("4. original_sessions Organization Check")
         assert self.root is not None
 
         sessions_dir = self.root / ORIGINAL_SESSIONS_DIR_NAME
         has_sessions = sessions_dir.is_dir()
         if not has_sessions:
-            section.add_fail(f"缺少 {ORIGINAL_SESSIONS_DIR_NAME}/ 目录", self._rel(sessions_dir))
+            section.add_fail(f"Missing {ORIGINAL_SESSIONS_DIR_NAME}/ directory", self._rel(sessions_dir))
             self._record_failures()
             return
 
@@ -3856,18 +3856,18 @@ class PackageValidator:
         )
         for path in root_legacy_files:
             section.add_fail(
-                f"根目录存在旧会话 JSON 文件，应迁移到 {ORIGINAL_SESSIONS_DIR_NAME}/",
+                f"Root directory has old session JSON files, should be migrated to {ORIGINAL_SESSIONS_DIR_NAME}/",
                 self._rel(path),
             )
 
         entries = sorted(sessions_dir.iterdir(), key=lambda p: p.name.lower())
         if not entries:
-            section.add_fail(f"{ORIGINAL_SESSIONS_DIR_NAME}/ 目录为空", self._rel(sessions_dir))
+            section.add_fail(f"{ORIGINAL_SESSIONS_DIR_NAME}/ directory is empty", self._rel(sessions_dir))
             self._record_failures()
             return
 
         section.add_pass(
-            f"已启用直检模式：对 {ORIGINAL_SESSIONS_DIR_NAME}/ 直接执行会话目录检查（不做 zip 搜索与解压）",
+            f"Direct check mode enabled: on {ORIGINAL_SESSIONS_DIR_NAME}/ executing session directory checks directly (no zip search and extract)",
             self._rel(sessions_dir),
         )
 
@@ -3909,18 +3909,18 @@ class PackageValidator:
 
         if frontend_language_value in {"server", "backend"}:
             self.backend_content = True
-            self.backend_reason = f"metadata.frontend_language={frontend_language_value}（按后端处理）"
+            self.backend_reason = f"metadata.frontend_language={frontend_language_value} (Processed as backend)"
             return
 
         if self.project_type_name in {"pure_backend", "fullstack"}:
             self.backend_content = True
-            self.backend_reason = f"旧结构项目类型为 {self.project_type_name}"
+            self.backend_reason = f"Old structure project type is {self.project_type_name}"
             return
 
         project_dir = self.project_type_dir
         if project_dir is None:
             self.backend_content = False
-            self.backend_reason = "代码目录不可用"
+            self.backend_reason = "Code directory unavailable"
             return
 
         for current_root, dirs, files in os.walk(project_dir, topdown=True):
@@ -3942,7 +3942,7 @@ class PackageValidator:
                 if any(keyword in name for keyword in BACKEND_KEYWORDS):
                     path = current_path / dirname
                     self.backend_content = True
-                    self.backend_reason = f"检测到后端关键字目录: {self._rel(path)}"
+                    self.backend_reason = f"Detected backend keyword directory: {self._rel(path)}"
                     return
             for filename in files:
                 file_path = current_path / filename
@@ -3951,63 +3951,63 @@ class PackageValidator:
                 lower = filename.lower()
                 if lower in BACKEND_MARKER_FILES or lower.endswith(".csproj"):
                     self.backend_content = True
-                    self.backend_reason = f"检测到后端标志文件: {self._rel(file_path)}"
+                    self.backend_reason = f"Detected backend marker file: {self._rel(file_path)}"
                     return
 
         self.backend_content = False
-        self.backend_reason = "未检测到后端关键字目录或后端标志文件"
+        self.backend_reason = "No backend keyword directory or backend marker file detected"
 
     def _check_docs_directory(self) -> None:
-        section = self._new_section("6. docs 目录及设计文档检查")
+        section = self._new_section("6. docs Directory and Design Document Check")
         assert self.root is not None
 
         docs_dir = self.root / "docs"
         if docs_dir.is_dir():
-            section.add_pass("docs/ 目录存在", self._rel(docs_dir))
+            section.add_pass("docs/ directory exists", self._rel(docs_dir))
         else:
             _, misplaced_docs, typo_docs = self._collect_required_dir_candidates("docs", {"doc", "document", "documents"})
             if misplaced_docs or typo_docs:
                 for path in misplaced_docs[:5]:
                     section.add_fail(
-                        f"docs/ 目录放置位置错误，应位于 TASK 根目录而不是 {self._rel(path.parent)}/",
+                        f"docs/ directory placed incorrectly, should be in TASK root directory instead of {self._rel(path.parent)}/",
                         self._rel(path),
                     )
                 for path in typo_docs[:5]:
                     section.add_fail(
-                        f"{path.name}/ 目录命名错误，应命名为 docs/ 并位于 TASK 根目录",
+                        f"{path.name}/ directory naming incorrect, should be named docs/ and located in TASK root directory",
                         self._rel(path),
                     )
             else:
-                section.add_fail("缺少 docs/ 目录", "docs/")
+                section.add_fail("Missing docs/ directory", "docs/")
             self._record_failures()
             return
 
         design_doc = docs_dir / "design.md"
         if design_doc.is_file():
-            section.add_pass("存在 docs/design.md", self._rel(design_doc))
+            section.add_pass("docs/design.md exists", self._rel(design_doc))
         else:
-            section.add_fail("缺少 docs/design.md", self._rel(design_doc))
+            section.add_fail("Missing docs/design.md", self._rel(design_doc))
 
         questions_doc = docs_dir / "questions.md"
         if questions_doc.is_file():
-            section.add_pass("存在 docs/questions.md", self._rel(questions_doc))
+            section.add_pass("docs/questions.md exists", self._rel(questions_doc))
         else:
-            section.add_fail("缺少 docs/questions.md", self._rel(questions_doc))
+            section.add_fail("Missing docs/questions.md", self._rel(questions_doc))
 
         self._detect_backend_content()
         api_spec = docs_dir / "api-spec.md"
         if self.backend_content:
             if api_spec.is_file():
-                section.add_pass("后端内容项目存在 docs/api-spec.md", self._rel(api_spec))
+                section.add_pass("Backend content project has docs/api-spec.md", self._rel(api_spec))
             else:
-                section.add_fail("检测到后端内容，缺少 docs/api-spec.md", self._rel(api_spec))
+                section.add_fail("Detected backend content, missing docs/api-spec.md", self._rel(api_spec))
         else:
-            section.add_pass("未检测到后端内容，docs/api-spec.md 非必需", self._rel(api_spec))
+            section.add_pass("No backend content detected, docs/api-spec.md is not required", self._rel(api_spec))
 
         self._record_failures()
 
     def _check_metadata_file(self) -> None:
-        section = self._new_section("5. metadata.json 检查")
+        section = self._new_section("5. metadata.json Check")
         assert self.root is not None
         self.metadata_source_path = None
 
@@ -4029,7 +4029,7 @@ class PackageValidator:
                 source_path = typos[0]
                 from_nonstandard = True
             else:
-                section.add_fail("缺少 metadata.json，无法执行元数据字段检查", "metadata.json")
+                section.add_fail("Missing metadata.json, cannot perform metadata field checks", "metadata.json")
                 self.metadata = {}
                 self._record_failures()
                 return
@@ -4037,7 +4037,7 @@ class PackageValidator:
         assert source_path is not None
         content = self._read_text(source_path)
         if content is None:
-            section.add_fail("metadata.json 非可读文本", self._rel(source_path))
+            section.add_fail("metadata.json is unreadable text", self._rel(source_path))
             self.metadata = {}
             self._record_failures()
             return
@@ -4045,13 +4045,13 @@ class PackageValidator:
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError as exc:
-            section.add_fail(f"metadata.json 不是合法 JSON: {exc.msg}", self._rel(source_path))
+            section.add_fail(f"metadata.json is not valid JSON: {exc.msg}", self._rel(source_path))
             self.metadata = {}
             self._record_failures()
             return
 
         if not isinstance(parsed, dict):
-            section.add_fail("metadata.json 顶层必须为 JSON 对象", self._rel(source_path))
+            section.add_fail("metadata.json top-level must be JSON object", self._rel(source_path))
             self.metadata = {}
             self._record_failures()
             return
@@ -4061,11 +4061,11 @@ class PackageValidator:
 
         if from_nonstandard:
             section.add_warn(
-                "根目录 metadata.json 缺失，已使用错位/命名错误文件继续字段检查（请先修复第2项）",
+                "Root directory metadata.json missing, using misplaced/incorrectly named file for field checks (please fix item 2 first)",
                 self._rel(source_path),
             )
         else:
-            section.add_pass("根目录存在 metadata.json", self._rel(source_path))
+            section.add_pass("Root directory has metadata.json", self._rel(source_path))
 
         project_type_raw = parsed.get("project_type")
         project_type_normalized = ""
@@ -4080,23 +4080,23 @@ class PackageValidator:
 
         for key in METADATA_REQUIRED_KEYS:
             if key not in parsed:
-                section.add_fail(f"metadata.json 缺少必需字段: {key}", self._rel(source_path))
+                section.add_fail(f"metadata.json missing required fields: {key}", self._rel(source_path))
                 continue
 
             value = parsed.get(key)
             if not isinstance(value, str):
-                section.add_fail(f"metadata.json 字段 {key} 必须为非空字符串", self._rel(source_path))
+                section.add_fail(f"metadata.json field {key} must be non-empty string", self._rel(source_path))
                 continue
 
             normalized = value.strip()
             if not normalized:
                 if key in allow_empty_keys:
                     section.add_pass(
-                        f"metadata.json 字段 {key} 允许为空（project_type={project_type_normalized}）",
+                        f"metadata.json field {key} allowed empty (project_type={project_type_normalized})",
                         self._rel(source_path),
                     )
                     continue
-                section.add_fail(f"metadata.json 字段 {key} 不能为空", self._rel(source_path))
+                section.add_fail(f"metadata.json field {key} cannot be empty", self._rel(source_path))
                 continue
 
             if key == "project_type":
@@ -4104,17 +4104,17 @@ class PackageValidator:
                 if project_type_value not in METADATA_PROJECT_TYPE_SET:
                     allowed = ", ".join(METADATA_PROJECT_TYPE_ENUM)
                     section.add_fail(
-                        f"metadata.json 字段 project_type 非法: {value}（仅允许: {allowed}）",
+                        f"metadata.json field project_type invalid: {value} (Only allowed: {allowed})",
                         self._rel(source_path),
                     )
                     continue
                 section.add_pass(
-                    f"metadata.json 字段 project_type 合法: {project_type_value}",
+                    f"metadata.json field project_type valid: {project_type_value}",
                     self._rel(source_path),
                 )
                 continue
 
-            section.add_pass(f"metadata.json 字段 {key} 为非空字符串", self._rel(source_path))
+            section.add_pass(f"metadata.json field {key} is non-empty string", self._rel(source_path))
 
         self._record_failures()
 
@@ -4153,7 +4153,7 @@ class PackageValidator:
         return english_letters / total_letters
 
     def _check_metadata_prompt_english_mode(self) -> None:
-        section = self._new_section("7. metadata.prompt 英文模式判定")
+        section = self._new_section("7. metadata.prompt English Mode Check")
         assert self.root is not None
 
         source_path = self.metadata_source_path or (self.root / "metadata.json")
@@ -4164,7 +4164,7 @@ class PackageValidator:
         if prompt_value is not None:
             if not isinstance(prompt_value, str):
                 prompt_text = str(prompt_value)
-                section.add_warn("metadata.prompt 非字符串，已按字符串形式参与判定", self._rel(source_path))
+                section.add_warn("metadata.prompt is not string, checking as string format", self._rel(source_path))
             else:
                 prompt_text = prompt_value
 
@@ -4184,12 +4184,12 @@ class PackageValidator:
             if fallback_used is not None:
                 prompt_source = self._rel(fallback_used)
                 section.add_warn(
-                    "metadata.prompt 缺失或为空，已回退使用 prompts.md/prompt.md 进行英文模式判定",
+                    "metadata.prompt missing or empty, falling back to prompts.md/prompt.md for English mode check",
                     prompt_source,
                 )
             else:
                 section.add_fail(
-                    "metadata.prompt 缺失且未找到可用 prompts.md（或 prompt.md）进行回退判定",
+                    "metadata.prompt missing and no usable prompts.md (or prompt.md) found for fallback check",
                     self._rel(source_path),
                 )
                 self.english_mode = False
@@ -4201,12 +4201,12 @@ class PackageValidator:
 
         if self.english_mode:
             section.add_pass(
-                f"metadata.prompt 英文字符占比 {english_ratio:.2%} > 70%，启用英文一致性模式",
+                f"metadata.prompt English character ratio {english_ratio:.2%} > 70%, English consistency mode enabled",
                 prompt_source,
             )
         else:
             section.add_pass(
-                f"metadata.prompt 英文字符占比 {english_ratio:.2%} <= 70%，不启用英文一致性模式",
+                f"metadata.prompt English character ratio {english_ratio:.2%} <= 70%, English consistency mode not enabled",
                 prompt_source,
             )
 
@@ -4300,14 +4300,14 @@ class PackageValidator:
         if len(line_numbers) <= 20:
             return ", ".join(str(n) for n in line_numbers)
         head = ", ".join(str(n) for n in line_numbers[:20])
-        return f"{head} ... 共{len(line_numbers)}行"
+        return f"{head} ... Total{len(line_numbers)} rows"
 
     def _check_english_consistency(self) -> None:
-        section = self._new_section("8. 文本文件中文字符检查")
+        section = self._new_section("8. Text File Chinese Character Check")
         assert self.root is not None
 
         if not self.english_mode:
-            section.add_pass("未启用英文一致性模式，跳过中文字符检查", ".")
+            section.add_pass("English consistency mode not enabled, skipping Chinese character check", ".")
             self._record_failures()
             return
 
@@ -4318,44 +4318,44 @@ class PackageValidator:
                 failures += 1
                 formatted = self._format_line_numbers(line_numbers)
                 section.add_fail(
-                    f"检测到中文字符（英文一致性模式不允许，行号: {formatted}）",
+                    f"Detected Chinese characters (not allowed in English consistency mode, Line number: {formatted})",
                     self._rel(path),
                 )
 
         if failures == 0:
-            section.add_pass("未检测到中文字符", ".")
+            section.add_pass("No Chinese characters detected", ".")
 
         self._record_failures()
 
     def _check_backend_content_recognition(self) -> None:
-        section = self._new_section("9. 后端内容识别")
+        section = self._new_section("9. Backend Content Identification")
         assert self.root is not None
 
         self._detect_backend_content()
         if self.project_type_dir is None:
-            section.add_fail("无法判定后端内容：代码目录不可用", ".")
+            section.add_fail("Cannot determine backend content: code directory unavailable", ".")
             self._record_failures()
             return
 
         if self.backend_content:
-            section.add_pass(f"检测到后端内容: {self.backend_reason}", self._rel(self.project_type_dir))
+            section.add_pass(f"Detected backend content: {self.backend_reason}", self._rel(self.project_type_dir))
         else:
-            section.add_pass(f"未检测到后端内容: {self.backend_reason}", self._rel(self.project_type_dir))
+            section.add_pass(f"No backend content detected: {self.backend_reason}", self._rel(self.project_type_dir))
 
         self._record_failures()
 
     def _check_backend_project_requirements(self) -> None:
-        section = self._new_section("10. 后端类项目附加检查")
+        section = self._new_section("10. Backend Project Additional Check")
         assert self.root is not None
 
         self._detect_backend_content()
         if self.project_type_dir is None:
-            section.add_fail("代码目录不可用，无法执行后端附加检查", ".")
+            section.add_fail("Code directory unavailable, cannot perform backend additional checks", ".")
             self._record_failures()
             return
 
         if not self.backend_content:
-            section.add_pass("非后端内容项目，跳过 Docker/Compose/测试脚本检查", self._rel(self.project_type_dir))
+            section.add_pass("Not a backend content project, skipping Docker/Compose/test script check", self._rel(self.project_type_dir))
             self._record_failures()
             return
 
@@ -4375,43 +4375,43 @@ class PackageValidator:
         if dockerfiles:
             display_paths = ", ".join(self._rel(p) for p in dockerfiles[:3])
             if len(dockerfiles) > 3:
-                display_paths += f" 等{len(dockerfiles)}处"
-            section.add_pass(f"后端项目存在 Dockerfile（位置可在子目录）: {display_paths}", self._rel(dockerfiles[0]))
+                display_paths += f" etc.{len(dockerfiles)} places"
+            section.add_pass(f"Backend project has Dockerfile (can be in subdirectories): {display_paths}", self._rel(dockerfiles[0]))
         else:
             section.add_fail(
-                "后端项目缺少 Dockerfile（允许位于 repo 目录或其子目录）",
+                "Backend project missing Dockerfile (allowed in repo directory or its subdirectories)",
                 self._rel(self.project_type_dir),
             )
 
         compose_found = [p.name for p in compose_paths]
         if compose_found:
             section.add_pass(
-                f"后端项目存在 Compose 文件: {compose_found[0]}",
+                f"Backend project has Compose file: {compose_found[0]}",
                 self._rel(compose_paths[0]),
             )
         else:
             section.add_fail(
-                "后端项目缺少 Compose 文件（compose.yaml/compose.yml/docker-compose.yaml/docker-compose.yml）",
+                "Backend project missing Compose file (compose.yaml/compose.yml/docker-compose.yaml/docker-compose.yml)",
                 self._rel(self.project_type_dir),
             )
 
         tests_found = [p.name for p in test_paths]
         if tests_found:
             section.add_pass(
-                f"后端项目存在统一测试启动脚本: {tests_found[0]}",
+                f"Backend project has unified test startup script: {tests_found[0]}",
                 self._rel(test_paths[0]),
             )
         else:
             section.add_fail(
-                "后端项目缺少统一测试启动脚本（run_tests.sh/run_tests.bat/run_tests.ps1）",
+                "Backend project missing unified test startup script (run_tests.sh/run_tests.bat/run_tests.ps1)",
                 self._rel(self.project_type_dir),
             )
 
         api_spec = self.root / "docs" / "api-spec.md"
         if api_spec.is_file():
-            section.add_pass("后端项目存在 docs/api-spec.md", self._rel(api_spec))
+            section.add_pass("Backend project has docs/api-spec.md", self._rel(api_spec))
         else:
-            section.add_fail("后端项目缺少 docs/api-spec.md", self._rel(api_spec))
+            section.add_fail("Backend project missing docs/api-spec.md", self._rel(api_spec))
 
         self._record_failures()
 
@@ -4460,7 +4460,7 @@ class PackageValidator:
         return dockerfiles, compose_files, test_files
 
     def _check_gitignore_exists(self) -> None:
-        section = self._new_section("11. .gitignore 存在性检查")
+        section = self._new_section("11. .gitignore Existence Check")
         assert self.root is not None
 
         root_gitignore = self.root / ".gitignore"
@@ -4468,15 +4468,15 @@ class PackageValidator:
 
         found_count = 0
         if root_gitignore.is_file():
-            section.add_pass("根目录存在 .gitignore", self._rel(root_gitignore))
+            section.add_pass("Root directory has .gitignore", self._rel(root_gitignore))
             found_count += 1
         if repo_gitignore is not None and repo_gitignore.is_file():
-            section.add_pass("代码目录存在 .gitignore", self._rel(repo_gitignore))
+            section.add_pass("Code directory has .gitignore", self._rel(repo_gitignore))
             found_count += 1
 
         if found_count == 0:
             rel = self._rel(repo_gitignore) if repo_gitignore is not None else ".gitignore"
-            section.add_warn("未检测到 .gitignore（可在根目录或 repo 目录中提供）", rel)
+            section.add_warn("No .gitignore detected (can be provided in root or repo directory)", rel)
 
         self._record_failures()
 
@@ -4684,10 +4684,10 @@ class PackageValidator:
         return False
 
     def _check_gitignore_coverage(self) -> None:
-        section = self._new_section("12. .gitignore 覆盖检查")
+        section = self._new_section("12. .gitignore Coverage Check")
         scopes = self._get_gitignore_scopes()
         if not scopes:
-            section.add_warn("未检测到可读 .gitignore，无法进行覆盖检查（提醒项）", ".")
+            section.add_warn("No readable .gitignore detected, cannot perform coverage check (reminder)", ".")
             self._record_failures()
             return
 
@@ -4697,17 +4697,17 @@ class PackageValidator:
             all_entries.extend(entries)
 
         if not all_entries:
-            section.add_warn(".gitignore 内容为空或不可读，无法覆盖必要规则（提醒项）", scoped_desc)
+            section.add_warn(".gitignore content is empty or unreadable, cannot override necessary rules (reminder)", scoped_desc)
             self._record_failures()
             return
 
         if not self.languages:
-            section.add_pass("未识别到语言标志文件，跳过语言规则覆盖检查", scoped_desc)
+            section.add_pass("Language marker file not identified, skipping language rule coverage check", scoped_desc)
             self._record_failures()
             return
 
         section.add_pass(
-            "识别到语言类型: " + ", ".join(sorted(self.languages)),
+            "Identified language type: " + ", ".join(sorted(self.languages)),
             scoped_desc,
         )
 
@@ -4721,17 +4721,17 @@ class PackageValidator:
                 missing_patterns.append(required)
 
         if not missing_patterns:
-            section.add_pass(".gitignore 已覆盖当前语言和通用目录的常见产物规则", scoped_desc)
+            section.add_pass(".gitignore covers common artifacts rules for current language and general directories", scoped_desc)
         else:
             for pattern in missing_patterns:
-                section.add_warn(f".gitignore 未覆盖 {pattern}", scoped_desc)
+                section.add_warn(f".gitignore missing coverage for {pattern}", scoped_desc)
 
         self._record_failures()
 
     def _dir_violation_reason(self, dirname: str) -> str | None:
         lower = dirname.lower()
         if re.fullmatch(r"build-.*", lower):
-            return "为构建产物目录"
+            return "is build artifact directory"
         return DIR_VIOLATION_REASONS.get(lower)
 
     def _is_compile_exempt_dir(self, dirname: str) -> bool:
@@ -4753,7 +4753,7 @@ class PackageValidator:
         return None
 
     def _check_local_dirty_files(self) -> None:
-        section = self._new_section("13. 本地脏文件检查")
+        section = self._new_section("13. Local Dirty File Check")
         assert self.root is not None
 
         violations: list[tuple[Path, str, str]] = []
@@ -4810,14 +4810,14 @@ class PackageValidator:
         self._dirty_findings_cache = ordered
 
         if not ordered:
-            section.add_pass("未检测到缓存/依赖/构建产物/数据库等本地脏文件", ".")
+            section.add_pass("No local dirty files such as cache/dependencies/build artifacts/databases detected", ".")
         else:
             for path, reason, status in ordered:
                 rel_path = self._rel(path)
                 if path.is_dir():
                     rel_path = rel_path + "/"
                 if status == "WARN":
-                    reason_msg = f"{reason}（编译产物，豁免删除，仅提醒）"
+                    reason_msg = f"{reason} (Build artifact, exempt from deletion, reminder only)"
                     section.add_warn(f"{rel_path} {reason_msg}", rel_path)
                 else:
                     section.add_fail(f"{rel_path} {reason}", rel_path)
@@ -4829,12 +4829,12 @@ class PackageValidator:
             self.report_path = Path.cwd() / ".tmp" / "validation_report.md"
 
         self._record_failures()
-        lines = ["# 静态质检报告", ""]
+        lines = ["# Static QC Report", ""]
 
         for section in self.sections:
             lines.append(f"## {section.title}")
             if not section.items:
-                lines.append("- [PASS] 无检查项（.）")
+                lines.append("- [PASS] No items to check (.)")
             else:
                 for item in section.items:
                     lines.append(f"- [{item.status}] {item.message} ({item.rel_path})")
@@ -4853,18 +4853,18 @@ class PackageValidator:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="对项目交付目录进行静态合规检查")
-    parser.add_argument("target", help="目录路径或目录名")
+    parser = argparse.ArgumentParser(description="Perform static compliance checks on project delivery directory")
+    parser.add_argument("target", help="Directory path or directory name")
     parser.add_argument(
         "--convert-legacy",
         "--convert_legacy",
         action="store_true",
-        help="将旧结构迁移到新结构（repo/docs/questions.md/original_sessions/metadata），执行前会进行终端确认并备份",
+        help="Migrate old structure to new structure (repo/docs/questions.md/original_sessions/metadata), will prompt for confirmation and backup before execution",
     )
     parser.add_argument(
         "--repair",
         action="store_true",
-        help="输出报告后执行修复（转移/重命名/删除），执行前会进行终端确认，并在根目录 .backup 备份",
+        help="Execute repair (move/rename/delete) after outputting report, will prompt for confirmation and backup to .backup in root directory before execution",
     )
     return parser.parse_args(argv)
 
@@ -4880,11 +4880,11 @@ def main(argv: list[str]) -> int:
 
     if args.convert_legacy:
         if report.is_file():
-            print("CONVERT | 当前报告内容如下:")
+            print("CONVERT | Current report content:")
             try:
                 print(report.read_text(encoding="utf-8"))
             except OSError as exc:
-                print(f"CONVERT | 读取报告失败: {exc}")
+                print(f"CONVERT | Failed to read report: {exc}")
         validator.run_convert_legacy()
         passed, errors, report = validator.run()
         status = "PASS" if passed else "FAIL"
@@ -4892,11 +4892,11 @@ def main(argv: list[str]) -> int:
 
     if args.repair:
         if report.is_file():
-            print("REPAIR | 当前报告内容如下:")
+            print("REPAIR | Current report content:")
             try:
                 print(report.read_text(encoding="utf-8"))
             except OSError as exc:
-                print(f"REPAIR | 读取报告失败: {exc}")
+                print(f"REPAIR | Failed to read report: {exc}")
         validator.run_repair()
 
     return 0 if passed else 1
