@@ -32,15 +32,26 @@ For each task ID in --task-ids-file, this script:
      near-misses without requiring a manual fix.
  10. Removes git artifacts (.git, .gitattributes, .gitmodules, .github) so
      they aren't shipped. `.gitignore` is intentionally kept.
- 11. Moves the repo's `.tmp/` (if any) out to `<output>/TASK-<id>/.tmp` so
+ 11. Repo cleanliness check (raises if anything below is present):
+       - Anywhere in the cloned tree: `.env`, `.env.*`, `venv/`, `.venv/`,
+         `env/`, `node_modules/`, `__pycache__/`, `.pytest_cache/`,
+         `.mypy_cache/`, `.ruff_cache/`, `.idea/`, `.vscode/`, `dist/`,
+         `build/`, `.next/`, `.nuxt/`, `.cache/`, `.turbo/`, `.parcel-cache/`,
+         `coverage/`, `.nyc_output/`, `htmlcov/`, `.DS_Store`.
+       - Inside any `repo/` subdirectory of the clone: `.tmp/`, `tmp/`,
+         `temp/`, `_tmp/`, `docs/`, `doc/`, `documentation/`. (`.tmp/` at the
+         cloned root is fine -- it gets moved aside in step 12.)
+     If anything is found, the task fails with a `RepoCleanlinessError`
+     listing every offender.
+ 12. Moves the repo's `.tmp/` (if any) out to `<output>/TASK-<id>/.tmp` so
      it is excluded from the shipped zip.
- 12. Zips the cleaned repo, then extracts it to a scratch dir for validation.
- 13. Runs `validate_package_direct_original_sessions.py` against the
+ 13. Zips the cleaned repo, then extracts it to a scratch dir for validation.
+ 14. Runs `validate_package_direct_original_sessions.py` against the
      extracted directory.
- 14. On pass: replaces `original_sessions/` in the extract with a
+ 15. On pass: replaces `original_sessions/` in the extract with a
      Claude-project-named zip (e.g. `-home-husen-...-TASK-req-xxx.zip`)
      and rebuilds the final TASK zip from the extract.
- 15. Cleans up the per-task work dir (unless --keep-work-dir).
+ 16. Cleans up the per-task work dir (unless --keep-work-dir).
 
 Relationship to run_reconstruction_export_from_folder.py
 --------------------------------------------------------
