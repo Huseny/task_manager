@@ -4447,7 +4447,7 @@ class PackageValidator:
                 path = current_path / filename
                 if self._is_runtime_noise_file(path):
                     continue
-                if lower == "dockerfile":
+                if lower == "dockerfile" or lower.startswith("dockerfile."):
                     dockerfiles.append(path)
                 if lower in compose_set:
                     compose_files.append(path)

@@ -777,6 +777,29 @@ class StructureValidator(SectionValidator):
         else:
             section.add_fail("Missing test script repo/run_tests.sh", "repo/")
 
+        repo_subdir_for_docker = self.root / "repo"
+        if repo_subdir_for_docker.is_dir():
+            dockerfiles: list[Path] = []
+            for entry in repo_subdir_for_docker.rglob("*"):
+                if not entry.is_file():
+                    continue
+                lower = entry.name.lower()
+                if lower == "dockerfile" or lower.startswith("dockerfile."):
+                    dockerfiles.append(entry)
+            if dockerfiles:
+                display = ", ".join(self._rel(p) for p in dockerfiles[:3])
+                if len(dockerfiles) > 3:
+                    display += f" (+{len(dockerfiles) - 3} more)"
+                section.add_pass(
+                    f"Dockerfile found under repo/: {display}",
+                    self._rel(dockerfiles[0]),
+                )
+            else:
+                section.add_fail(
+                    "Missing Dockerfile under repo/ (Dockerfile, Dockerfile.dev, etc.)",
+                    "repo/",
+                )
+
         temp_findings = 0
         unnecessary_findings = 0
         env_findings = 0
