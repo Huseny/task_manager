@@ -100,6 +100,12 @@ phases:
           fail_and_upload "Docker Compose is not installed"
         fi
 
+        # Both docker-compose.yml and the test script live inside repo/.
+        if [ ! -d repo ]; then
+          fail_and_upload "repo/ directory not found in build dir"
+        fi
+        cd repo
+
         # Bring services up to confirm the app's docker-compose stack is healthy
         # on its own. We then take it down so the test suite runs against a
         # clean host with no external dependencies — if a test needs docker, the
@@ -110,19 +116,17 @@ phases:
         $COMPOSE_CMD down --remove-orphans >> "$COMBINED_LOG" 2>&1 || true
 
         log_section "TEST SUITE"
-        TEST_SCRIPT=""
-        for cand in run_tests.sh run_test.sh; do
-          [ -f "$cand" ] && { TEST_SCRIPT="$cand"; break; }
-        done
-
-        if [ -z "$TEST_SCRIPT" ]; then
-          fail_and_upload "No test script found"
+        TEST_SCRIPT="run_tests.sh"
+        if [ ! -f "$TEST_SCRIPT" ]; then
+          fail_and_upload "Missing test script repo/$TEST_SCRIPT"
         fi
 
         chmod +x "$TEST_SCRIPT"
         if ! ./"$TEST_SCRIPT" >> "$COMBINED_LOG" 2>&1; then
           fail_and_upload "$TEST_SCRIPT failed"
         fi
+
+        cd ..
 
   post_build:
     commands:
@@ -143,10 +147,15 @@ phases:
           COMPOSE_CMD=""
         fi
 
-        if [ -n "$COMPOSE_CMD" ]; then
+        # docker-compose.yml lives inside repo/, so cleanup must run from
+        # there too -- otherwise `compose logs`/`compose down` would error
+        # with "no configuration file provided".
+        if [ -n "$COMPOSE_CMD" ] && [ -d repo ]; then
+          cd repo
           printf '\n--- Docker Service Logs ---\n' >> "$COMBINED_LOG"
           $COMPOSE_CMD logs --no-color >> "$COMBINED_LOG" 2>&1 || true
           $COMPOSE_CMD down --remove-orphans >> "$COMBINED_LOG" 2>&1 || true
+          cd ..
         fi
 
         printf '\nBuild process finished at %s\n' "$(date)" >> "$COMBINED_LOG"

@@ -635,7 +635,7 @@ class StructureValidator(SectionValidator):
         "docs", "repo", ".tmp", "metadata.json",
         ".git", ".gitignore", ".github",
     }
-    TEST_SCRIPT_OPTIONS = ("repo/run_test.sh", "repo/run_tests.sh")
+    TEST_SCRIPT_OPTIONS = ("repo/run_tests.sh",)
 
     def __init__(self, root: Path, expect_original_sessions: bool = True) -> None:
         super().__init__(root)
@@ -698,7 +698,7 @@ class StructureValidator(SectionValidator):
         if found_test:
             section.add_pass(f"Test script found: {found_test}", found_test)
         else:
-            section.add_fail("Missing test script (run_test.sh or run_tests.sh)", "repo/")
+            section.add_fail("Missing test script repo/run_tests.sh", "repo/")
 
         temp_findings = 0
         for entry in self.root.rglob("*"):
@@ -878,6 +878,7 @@ class SessionsValidator(SectionValidator):
             return
 
         self._check_session_naming(section, sessions_dir)
+        self._check_session_id_matches_filename(section, sessions_dir)
         self._check_bundle_structure(section, sessions_dir)
         self._check_prompt_anchor(section, sessions_dir)
         self._check_latest_trajectory(section, sessions_dir)
@@ -916,6 +917,68 @@ class SessionsValidator(SectionValidator):
                 "Session file/directory names are valid UUIDs with .jsonl extension",
                 self._rel(sessions_dir),
             )
+
+    def _check_session_id_matches_filename(
+        self, section: CheckSection, sessions_dir: Path
+    ) -> None:
+        """For each first-layer *.jsonl whose stem is a UUID, ensure the
+        `sessionId` recorded inside the file matches the filename stem.
+        """
+        mismatches = 0
+        checked = 0
+        skipped_no_id = 0
+        for path in self._first_layer_jsonl(sessions_dir):
+            if path.name in ALLOWED_NON_UUID_FIRST_LAYER_FILES:
+                continue
+            if not SESSION_UUID_RE.match(path.stem):
+                # Naming check will already have failed this; skip to avoid
+                # piling on a duplicate error.
+                continue
+            checked += 1
+            internal_id = self._read_session_id(path)
+            if internal_id is None:
+                skipped_no_id += 1
+                section.add_warn(
+                    "Could not find sessionId in file; cannot verify name matches contents",
+                    self._rel(path),
+                )
+                continue
+            if internal_id != path.stem:
+                mismatches += 1
+                section.add_fail(
+                    (
+                        f"Filename does not match internal sessionId "
+                        f"(file stem={path.stem}, sessionId={internal_id})"
+                    ),
+                    self._rel(path),
+                )
+
+        if checked and mismatches == 0 and skipped_no_id == 0:
+            section.add_pass(
+                f"Session filenames match internal sessionId ({checked} file(s))",
+                self._rel(sessions_dir),
+            )
+
+    @staticmethod
+    def _read_session_id(path: Path) -> str | None:
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for raw in handle:
+                    stripped = raw.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        payload = json.loads(stripped)
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    sid = payload.get("sessionId") or payload.get("session_id")
+                    if isinstance(sid, str) and sid.strip():
+                        return sid.strip()
+        except OSError:
+            return None
+        return None
 
     def _check_root_legacy_sessions(self, section: CheckSection) -> None:
         legacy_pattern = re.compile(
@@ -1285,14 +1348,13 @@ class Validator:
         access_token: str | None,
         task_url_template: str,
         prefetched_task: dict[str, Any] | None = None,
-        initial_sections: list[CheckSection] | None = None,
     ) -> None:
         self.target = target
         self.task_id = task_id
         self.access_token = access_token
         self.task_url_template = task_url_template
         self.prefetched_task = prefetched_task
-        self.sections: list[CheckSection] = list(initial_sections or [])
+        self.sections: list[CheckSection] = []
 
     def run(self) -> int:
         input_section = self._new_section("1. Input Directory")
@@ -1383,36 +1445,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run_pre_rearrangement_checks(repo_dir: Path) -> tuple[list[CheckSection], int]:
-    """Structural gate before original_sessions/ is staged into the repo.
-
-    metadata.json is intentionally NOT checked here -- that runs once, in
-    section "3. metadata.json" of the main validator pass. Running it twice
-    just produced duplicate output without catching anything new.
-    """
-    structure = CheckSection(title="0. Cloned Repo Structure (pre-rearrangement)")
-    StructureValidator(repo_dir, expect_original_sessions=False).validate(structure)
-    sections = [structure]
-    fails = sum(1 for s in sections for it in s.items if it.status == "FAIL")
-    return sections, fails
-
-
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     target = args.target
     prefetched_task: dict[str, Any] | None = None
-    initial_sections: list[CheckSection] = []
 
     if args.prepare_ci:
         ctx = clone_repo_for_ci(args)
         prefetched_task = ctx.task
 
-        initial_sections, pre_fails = run_pre_rearrangement_checks(ctx.repo_dir)
-        if pre_fails:
-            print_report(initial_sections)
-            write_build_dir_marker(args, ctx.repo_dir)
-            return 1
-
+        # Structure is fully validated in section "2. Structure" of the main
+        # validator pass below; no separate pre-rearrangement gate is needed.
         stage_sessions_into_repo(ctx)
         write_build_dir_marker(args, ctx.repo_dir)
         target = str(ctx.repo_dir)
@@ -1423,7 +1466,6 @@ def main(argv: list[str]) -> int:
         access_token=args.access_token,
         task_url_template=args.task_url_template,
         prefetched_task=prefetched_task,
-        initial_sections=initial_sections,
     )
     return validator.run()
 

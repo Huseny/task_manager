@@ -1893,8 +1893,36 @@ def process_task(
     # subdir check intentionally only looks under a `repo/` subfolder, so a
     # `.tmp/` at the cloned root is fine.
     log.info("[%s] checking repo cleanliness", task_id)
-    assert_repo_clean(cloned_repo_dir)
-    log.info("[%s] repo cleanliness OK", task_id)
+    while True:
+        try:
+            assert_repo_clean(cloned_repo_dir)
+            log.info("[%s] repo cleanliness OK", task_id)
+            break
+        except RepoCleanlinessError as exc:
+            log.error("[%s] repo cleanliness FAILED: %s", task_id, exc)
+            if not interactive_on_validation_failure:
+                raise
+
+            print("")
+            print(
+                f"[{task_id}] To fix manually, edit the cloned repo at:"
+            )
+            print(f"    {cloned_repo_dir}")
+
+            choice = _prompt_validation_action(task_id, exc)
+            if choice == "skip":
+                raise
+            if choice == "zip":
+                log.warning(
+                    "[%s] user chose ZIP-ANYWAY; continuing despite repo cleanliness failure",
+                    task_id,
+                )
+                break
+            log.info(
+                "[%s] user chose RETRY; re-checking repo cleanliness",
+                task_id,
+            )
+            continue
 
     task_output_dir = output_dir / f"TASK-{task_id}"
     task_output_dir.mkdir(parents=True, exist_ok=True)
@@ -2295,9 +2323,23 @@ def main() -> int:
                     }
                 )
                 continue
+            except RepoCleanlinessError as exc:
+                failed += 1
+                log.error("[%s] FAILED repo cleanliness: %s", task_id, exc)
+                task_reports.append(
+                    {
+                        "index": idx,
+                        "requested_task_id": requested_task_id,
+                        "task_id": task_id,
+                        "status": "failed",
+                        "stage": "cleanliness",
+                        "error": str(exc),
+                    }
+                )
+                continue
             except Exception as exc:
                 failed += 1
-                log.exception("[%s] FAILED: %s", task_id, exc)
+                log.error("[%s] FAILED: %s", task_id, exc)
                 task_reports.append(
                     {
                         "index": idx,
