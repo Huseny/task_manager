@@ -1209,15 +1209,47 @@ class AquilaAlignmentValidator(SectionValidator):
 # Report writer
 # ---------------------------------------------------------------------------
 
+STATUS_ICON = {"PASS": "✅", "FAIL": "❌", "WARN": "⚠️"}
+
+
 def render_report(sections: list[CheckSection]) -> str:
     lines = ["# Validation Report", ""]
+
+    # Top-of-report callout listing every section that has at least one
+    # failure, so failures are visible at a glance without scrolling.
+    failing_sections = [s for s in sections if any(it.status == "FAIL" for it in s.items)]
+    total_fails = sum(1 for s in sections for it in s.items if it.status == "FAIL")
+    if total_fails:
+        section_word = "section" if len(failing_sections) == 1 else "sections"
+        fail_word = "failure" if total_fails == 1 else "failures"
+        lines.append(
+            f"> ❌ **{total_fails} {fail_word}** across "
+            f"{len(failing_sections)} {section_word}:"
+        )
+        for sec in failing_sections:
+            n = sum(1 for it in sec.items if it.status == "FAIL")
+            lines.append(f"> - {sec.title} ({n})")
+        lines.append("")
+
     for section in sections:
         lines.append(f"## {section.title}")
         if not section.items:
-            lines.append("- [PASS] No checks")
+            lines.append(f"- [{STATUS_ICON['PASS']} PASS] No checks")
         else:
             for item in section.items:
-                lines.append(f"- [{item.status}] {item.message} ({item.rel_path})")
+                icon = STATUS_ICON.get(item.status, "•")
+                if item.status == "FAIL":
+                    # Bold the whole line so it stands out in markdown viewers,
+                    # and lead with the ❌ icon so it pops in plain CI logs.
+                    lines.append(
+                        f"- **[{icon} {item.status}] {item.message}** "
+                        f"({item.rel_path})"
+                    )
+                else:
+                    lines.append(
+                        f"- [{icon} {item.status}] {item.message} "
+                        f"({item.rel_path})"
+                    )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -1352,16 +1384,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def run_pre_rearrangement_checks(repo_dir: Path) -> tuple[list[CheckSection], int]:
-    """Validate the freshly cloned repo before original_sessions/ is placed.
+    """Structural gate before original_sessions/ is staged into the repo.
 
-    Mirrors the structural and metadata checks from validator.py: there is
-    no original_sessions/ at this point and any presence would be unexpected.
+    metadata.json is intentionally NOT checked here -- that runs once, in
+    section "3. metadata.json" of the main validator pass. Running it twice
+    just produced duplicate output without catching anything new.
     """
-    structure = CheckSection(title="0a. Cloned Repo Structure (pre-rearrangement)")
+    structure = CheckSection(title="0. Cloned Repo Structure (pre-rearrangement)")
     StructureValidator(repo_dir, expect_original_sessions=False).validate(structure)
-    metadata = CheckSection(title="0b. Cloned Repo metadata.json (pre-rearrangement)")
-    MetadataValidator(repo_dir).validate(metadata)
-    sections = [structure, metadata]
+    sections = [structure]
     fails = sum(1 for s in sections for it in s.items if it.status == "FAIL")
     return sections, fails
 

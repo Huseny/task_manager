@@ -77,8 +77,8 @@ def monitor_build(build_id):
 if __name__ == "__main__":
     # CONFIGURATION
     PROJECT_NAME = "MindflowTaskExecutor"
-    TASK_ID = "req_e14a584d59d4"
-    AQUILA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI5MGQ2NGQ1YS0zZDg2LTRjOTQtOWNjMS1kYjY3MTI1NTc3NzAiLCJleHAiOjE3NzczNjI2MzB9.vLzr3u2Vlo89_IKNHyHf5BpB0m23YgDjHp-HEhgTzCk"
+    TASK_ID = "req_e07b53845043"
+    AQUILA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI5MGQ2NGQ1YS0zZDg2LTRjOTQtOWNjMS1kYjY3MTI1NTc3NzAiLCJleHAiOjE3NzczNjQ3NjR9.hpnSC3aHZRKOuglJkRVwQ6YTxJzQvig1vrg-h4PKAHY"
 
     bid = start_codebuild_task(PROJECT_NAME, TASK_ID, AQUILA_TOKEN)
     monitor_build(bid)
