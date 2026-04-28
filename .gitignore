@@ -3,3 +3,7 @@ __pycache__
 .env
 .venv/
 .claude/
+
+*.txt
+task_exports/
+_task_export_work/
