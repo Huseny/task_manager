@@ -66,7 +66,7 @@ NULLABLE_METADATA_FIELDS = {
     "frontend_framework",
 }
 
-SESSION_PROMPT_ANCHOR_LEN = 50
+SESSION_PROMPT_ANCHOR_LEN = 40
 SESSION_PROMPT_SIMILARITY_THRESHOLD = 0.95
 SESSION_PROMPT_CANDIDATE_WINDOW_MINUTES = 20
 SESSION_PROMPT_EXEMPT_CONTENT_PREFIXES = (
@@ -489,7 +489,10 @@ class JsonlAnalysis:
 
 
 def _normalize_for_compare(text: str) -> str:
-    text = unicodedata.normalize("NFKC", text or "")
+    if not text:
+        return ""
+
+    text = unicodedata.normalize("NFKC", text)
     text = text.replace(r"\n", "").replace(r"\r", "").replace(r"\t", "")
     text = text.replace(r"\"", "").replace(r"\'", "")
     return re.sub(r"[^A-Za-z0-9一-鿿]+", "", text)
@@ -505,28 +508,121 @@ def _strip_trailing_punct(text: str | None) -> str:
     return out
 
 
-def compare_by_anchor(reference_text: str, target_text: str) -> dict[str, Any]:
-    head = reference_text.lstrip()[:SESSION_PROMPT_ANCHOR_LEN]
-    tail = _strip_trailing_punct(reference_text)[-SESSION_PROMPT_ANCHOR_LEN:]
+def _get_head_anchor(
+    reference_text: str, anchor_len: int = SESSION_PROMPT_ANCHOR_LEN
+) -> str:
+    return reference_text.lstrip()[:anchor_len]
+
+
+def _get_tail_anchor(
+    reference_text: str, anchor_len: int = SESSION_PROMPT_ANCHOR_LEN
+) -> str:
+    ref = _strip_trailing_punct(reference_text)
+    if not ref:
+        return ""
+    return ref[-anchor_len:]
+
+
+def _build_loose_pattern(head_anchor: str, tail_anchor: str) -> str:
+    head = re.escape(head_anchor)
+    tail = re.escape(tail_anchor)
     if not head and not tail:
-        return {"near_duplicate": False, "similarity": 0.0, "matched": False}
-    if head and tail:
-        pattern = rf"{re.escape(head)}(.*?){re.escape(tail)}"
-    elif head:
-        pattern = rf"{re.escape(head)}(.*)"
-    else:
-        pattern = rf"(.*?){re.escape(tail)}"
-    match = re.search(pattern, target_text, flags=re.DOTALL)
-    candidate = match.group(0) if match else target_text
-    s1 = _normalize_for_compare(reference_text)
-    s2 = _normalize_for_compare(candidate)
-    similarity = (
-        1.0 if s1 == s2 and s1 else difflib.SequenceMatcher(None, s1, s2).ratio()
-    )
+        return r"(.*)"
+    if head and not tail:
+        return rf"{head}(.*)"
+    if tail and not head:
+        return rf"(.*?){tail}"
+    return rf"{head}(.*?){tail}"
+
+
+def _similarity_score(text1: str, text2: str) -> float:
+    s1 = _normalize_for_compare(text1)
+    s2 = _normalize_for_compare(text2)
+    return difflib.SequenceMatcher(None, s1, s2).ratio()
+
+
+def _get_diff_preview(text1: str, text2: str, context: int = 60) -> dict[str, Any]:
+    s1 = _normalize_for_compare(text1)
+    s2 = _normalize_for_compare(text2)
+
+    min_len = min(len(s1), len(s2))
+    diff_index = -1
+    for idx in range(min_len):
+        if s1[idx] != s2[idx]:
+            diff_index = idx
+            break
+    if diff_index == -1 and len(s1) != len(s2):
+        diff_index = min_len
+
+    if diff_index == -1:
+        return {"diff_index": -1, "reference_preview": "", "matched_preview": ""}
+
+    start = max(0, diff_index - context)
+    end1 = min(len(s1), diff_index + context)
+    end2 = min(len(s2), diff_index + context)
     return {
+        "diff_index": diff_index,
+        "reference_preview": s1[start:end1],
+        "matched_preview": s2[start:end2],
+    }
+
+
+def compare_by_anchor(reference_text: str, target_text: str) -> dict[str, Any]:
+    head = _get_head_anchor(reference_text)
+    tail = _get_tail_anchor(reference_text)
+    if not head and not tail:
+        return {
+            "matched": False,
+            "equal": False,
+            "near_duplicate": False,
+            "similarity": 0.0,
+            "reason": "reference_text empty or unable to extract anchor",
+            "fallback_full_text": False,
+        }
+
+    pattern = _build_loose_pattern(head, tail)
+    match = re.search(pattern, target_text, flags=re.DOTALL)
+    if not match:
+        similarity = _similarity_score(reference_text, target_text)
+        diff_info = _get_diff_preview(reference_text, target_text)
+        reference_normalized = _normalize_for_compare(reference_text)
+        target_normalized = _normalize_for_compare(target_text)
+        return {
+            "matched": False,
+            "equal": reference_normalized == target_normalized,
+            "near_duplicate": similarity >= SESSION_PROMPT_SIMILARITY_THRESHOLD,
+            "similarity": similarity,
+            "head_anchor": head,
+            "tail_anchor": tail,
+            "matched_segment": target_text,
+            "reference_normalized": reference_normalized,
+            "matched_normalized": target_normalized,
+            "diff_index": diff_info["diff_index"],
+            "reference_diff_preview": diff_info["reference_preview"],
+            "matched_diff_preview": diff_info["matched_preview"],
+            "fallback_full_text": True,
+            "reason": "Candidate text segment bounded by head and tail anchors not found in target text, degraded to full-segment similarity check",
+        }
+
+    candidate = match.group(0)
+    similarity = _similarity_score(reference_text, candidate)
+    diff_info = _get_diff_preview(reference_text, candidate)
+    reference_normalized = _normalize_for_compare(reference_text)
+    matched_normalized = _normalize_for_compare(candidate)
+    return {
+        "matched": True,
+        "equal": reference_normalized == matched_normalized,
         "near_duplicate": similarity >= SESSION_PROMPT_SIMILARITY_THRESHOLD,
         "similarity": similarity,
-        "matched": bool(match),
+        "head_anchor": head,
+        "tail_anchor": tail,
+        "matched_segment": candidate,
+        "reference_normalized": reference_normalized,
+        "matched_normalized": matched_normalized,
+        "diff_index": diff_info["diff_index"],
+        "reference_diff_preview": diff_info["reference_preview"],
+        "matched_diff_preview": diff_info["matched_preview"],
+        "fallback_full_text": False,
     }
 
 
@@ -1341,28 +1437,45 @@ class SessionsValidator(SectionValidator):
 
             best_similarity = -1.0
             best_line = -1
+            best_compare: dict[str, Any] | None = None
             for content_text, line_no, _ in window_candidates:
                 compare = compare_by_anchor(prompt_text, content_text)
                 similarity = float(compare["similarity"])
                 if similarity > best_similarity:
                     best_similarity = similarity
                     best_line = line_no
+                    best_compare = compare
                 if bool(compare["near_duplicate"]):
+                    pass_mode = (
+                        "Anchor matched"
+                        if bool(compare.get("matched"))
+                        else "Anchor not matched (full-segment similarity fallback)"
+                    )
                     section.add_pass(
                         (
                             "Session prompt-anchor check passed "
+                            f"(similarity={similarity:.6f} >= threshold={SESSION_PROMPT_SIMILARITY_THRESHOLD:.6f})"
+                            f"(Check method={pass_mode})"
+                            " "
                             f"(file={selected_jsonl.name}, file_first_timestamp={first_ts}, file_first_timestamp_line={first_line}, "
-                            f"match_line={line_no}, similarity={similarity:.6f})"
+                            f"match_line={line_no}, window_candidate_count={len(window_candidates)})"
                         ),
                         self._rel(selected_jsonl),
                     )
                     return
 
+            diff_note = ""
+            if (
+                best_compare is not None
+                and int(best_compare.get("diff_index", -1)) >= 0
+            ):
+                diff_note = f", first difference position={int(best_compare.get('diff_index', -1))}"
             section.add_fail(
                 (
                     "Session prompt-anchor check failed due to low similarity "
+                    f"(similarity={best_similarity:.6f} < threshold={SESSION_PROMPT_SIMILARITY_THRESHOLD:.6f}{diff_note})"
                     f"(file={selected_jsonl.name}, file_first_timestamp={first_ts}, best_line={best_line}, "
-                    f"best_similarity={best_similarity:.6f}, threshold={SESSION_PROMPT_SIMILARITY_THRESHOLD:.6f})"
+                    f"window_candidate_count={len(window_candidates)})"
                 ),
                 self._rel(selected_jsonl),
             )
