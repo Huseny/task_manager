@@ -640,12 +640,81 @@ def _extract_text_content(message: dict[str, Any]) -> str:
         for item in content:
             if isinstance(item, str):
                 out.append(item)
-            elif isinstance(item, dict) and str(item.get("type", "")).lower() == "text":
-                out.append(str(item.get("text", "")))
+            elif isinstance(item, dict):
+                item_type = str(item.get("type", "")).lower()
+                if item_type == "text":
+                    out.append(str(item.get("text", "")))
+                elif item_type == "tool_result":
+                    out.append(str(item.get("content", "")))
         return "\n".join(out)
-    if isinstance(content, dict) and str(content.get("type", "")).lower() == "text":
-        return str(content.get("text", ""))
+    if isinstance(content, dict):
+        item_type = str(content.get("type", "")).lower()
+        if item_type == "text":
+            return str(content.get("text", ""))
+        if item_type == "tool_result":
+            return str(content.get("content", ""))
     return ""
+
+
+def _stringify_session_message_content(content: Any) -> str:
+    chunks: list[str] = []
+
+    def _collect(node: Any) -> None:
+        if node is None:
+            return
+        if isinstance(node, str):
+            chunks.append(node)
+            return
+        if isinstance(node, list):
+            for item in node:
+                _collect(item)
+            return
+        if isinstance(node, dict):
+            text_value = node.get("text")
+            if isinstance(text_value, str):
+                chunks.append(text_value)
+            elif text_value is not None:
+                chunks.append(str(text_value))
+            if "content" in node:
+                _collect(node.get("content"))
+            return
+        chunks.append(str(node))
+
+    _collect(content)
+    merged = "\n".join(part for part in chunks if part is not None and str(part).strip())
+    if merged.strip():
+        return merged
+    if isinstance(content, (dict, list)):
+        try:
+            return json.dumps(content, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            return str(content)
+    return "" if content is None else str(content)
+
+
+def _strip_read_tool_line_number_prefixes(text: str) -> str:
+    return re.sub(r"(?m)^\s*\d+\s*→\s*", "", text)
+
+
+def _extract_candidate_content_from_user_payload(
+    payload: dict[str, Any], message: dict[str, Any]
+) -> str:
+    fallback = _stringify_session_message_content(message.get("content"))
+    fallback = _strip_read_tool_line_number_prefixes(fallback)
+
+    tool_use_result = payload.get("toolUseResult")
+    if isinstance(tool_use_result, dict):
+        file_obj = tool_use_result.get("file")
+        if isinstance(file_obj, dict):
+            file_content = file_obj.get("content")
+            if isinstance(file_content, str) and file_content.strip():
+                return file_content
+
+        tur_content = tool_use_result.get("content")
+        if isinstance(tur_content, str) and tur_content.strip():
+            return _strip_read_tool_line_number_prefixes(tur_content)
+
+    return fallback
 
 
 def _is_local_command_noise(payload: dict[str, Any]) -> bool:
@@ -717,7 +786,7 @@ def analyze_jsonl(path: Path) -> JsonlAnalysis:
 
         if role == "user":
             analysis.user_line_count += 1
-            content_text = _extract_text_content(message)
+            content_text = _extract_candidate_content_from_user_payload(payload, message)
             if not content_text.strip():
                 continue
             if is_noise or content_text.lstrip().lower().startswith(
