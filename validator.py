@@ -876,17 +876,35 @@ class StructureValidator(SectionValidator):
 
     UNNECESSARY_EXACT_NAMES = {
         # Virtualenvs
-        "venv", ".venv", "env",
+        "venv",
+        ".venv",
+        "env",
         # JS deps
         "node_modules",
         # IDE / editor state
-        ".idea", ".vscode",
+        ".idea",
+        ".vscode",
+        # AI Agent caches
+        ".codex",
+        ".claude",
+        "agent.md",
+        "Agent.md",
+        "claude.md"
         # Build / framework caches
-        "dist", "build", ".next", ".nuxt", ".turbo", ".parcel-cache",
+        "dist",
+        "build",
+        ".next",
+        ".nuxt",
+        ".turbo",
+        ".parcel-cache",
         # Coverage / test artifacts
-        "coverage", ".nyc_output", "htmlcov",
+        "coverage",
+        ".nyc_output",
+        "htmlcov",
         # OS noise
-        ".DS_Store", "__MACOSX", "Thumbs.db",
+        ".DS_Store",
+        "__MACOSX",
+        "Thumbs.db",
     }
 
     def validate(self, section: CheckSection) -> None:
