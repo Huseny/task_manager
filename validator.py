@@ -5,13 +5,13 @@ Performs read-only checks against a delivery package and writes a markdown
 report. The validator does not modify any package files.
 
 In ``--prepare-ci`` mode the run is:
-    1. Fetch the Aquila task once.
-    2. Clone the GitHub repo.
-    3. Pre-rearrangement validation: assert the cloned repo matches the
-       ``validator.py``-style structure (no ``original_sessions/`` yet).
-       If this gate fails, write the report and exit before touching anything.
-    4. Rearrange: extract the sessions zip into ``<repo>/original_sessions/``.
-    5. Run full validation against the rearranged repo, reusing the already
+     1. Fetch the Aquila task once.
+     2. Clone the GitHub repo.
+     3. Pre-rearrangement validation: assert the cloned repo matches the
+         ``validator.py``-style structure without expecting ``original_sessions/``.
+         If this gate fails, write the report and exit before touching anything.
+     4. Rearrange: extract the sessions zip into ``<repo>/original_sessions/``.
+     5. Run full validation against the rearranged repo, reusing the already
        fetched Aquila task for cross-checks (no second HTTP call).
 
 Sections (full validation):
@@ -1789,25 +1789,30 @@ class Validator:
         self.prefetched_task = prefetched_task
         self.sections: list[CheckSection] = []
 
-    def run(self) -> int:
+    def run(self, validate_structure: bool = True) -> int:
         input_section = self._new_section("1. Input Directory")
         root = self._resolve_root(input_section)
         if root is None:
             print_report(self.sections)
             return 1
 
-        structure_section = self._new_section("2. Structure")
-        StructureValidator(root, expect_original_sessions=True).validate(
-            structure_section
-        )
+        section_number = 2
+        if validate_structure:
+            structure_section = self._new_section(f"{section_number}. Structure")
+            StructureValidator(root, expect_original_sessions=True).validate(
+                structure_section
+            )
+            section_number += 1
 
-        metadata_section = self._new_section("3. metadata.json")
+        metadata_section = self._new_section(f"{section_number}. metadata.json")
         metadata = MetadataValidator(root).validate(metadata_section)
+        section_number += 1
 
-        sessions_section = self._new_section("4. original_sessions")
+        sessions_section = self._new_section(f"{section_number}. original_sessions")
         SessionsValidator(root, metadata).validate(sessions_section)
+        section_number += 1
 
-        aquila_section = self._new_section("5. Aquila Alignment")
+        aquila_section = self._new_section(f"{section_number}. Aquila Alignment")
         AquilaAlignmentValidator(
             root,
             metadata,
@@ -1868,7 +1873,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--prepare-ci",
         action="store_true",
-        help="Fetch task from Aquila, clone repo, and stage original_sessions before validation",
+        help="Fetch task from Aquila, clone repo, validate structure, and stage original_sessions before validation",
     )
     parser.add_argument(
         "--workspace-dir",
@@ -1902,8 +1907,14 @@ def main(argv: list[str]) -> int:
         ctx = clone_repo_for_ci(args)
         prefetched_task = ctx.task
 
-        # Structure is fully validated in section "2. Structure" of the main
-        # validator pass below; no separate pre-rearrangement gate is needed.
+        preflight_section = CheckSection(title="1. Structure")
+        StructureValidator(ctx.repo_dir, expect_original_sessions=False).validate(
+            preflight_section
+        )
+        if any(item.status == "FAIL" for item in preflight_section.items):
+            print_report([preflight_section])
+            return 1
+
         stage_sessions_into_repo(ctx)
         write_build_dir_marker(args, ctx.repo_dir)
         target = str(ctx.repo_dir)
@@ -1915,7 +1926,7 @@ def main(argv: list[str]) -> int:
         task_url_template=args.task_url_template,
         prefetched_task=prefetched_task,
     )
-    return validator.run()
+    return validator.run(validate_structure=not args.prepare_ci)
 
 
 def _safe_main(argv: list[str]) -> int:
