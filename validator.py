@@ -1211,15 +1211,13 @@ class SessionsValidator(SectionValidator):
     def validate(self, section: CheckSection) -> None:
         sessions_dir = self.root / ORIGINAL_SESSIONS_DIR
         if not sessions_dir.is_dir():
-            section.add_fail(
-                "Missing original_sessions/ directory", self._rel(sessions_dir)
-            )
+            section.add_fail("Missing Session zip", self._rel(sessions_dir))
             return
 
         self._check_root_legacy_sessions(section)
 
         if not list(sessions_dir.iterdir()):
-            section.add_fail("original_sessions/ is empty", self._rel(sessions_dir))
+            section.add_fail("Session zip is empty", self._rel(sessions_dir))
             return
 
         self._check_session_naming(section, sessions_dir)
@@ -1355,7 +1353,7 @@ class SessionsValidator(SectionValidator):
 
         if not session_dirs:
             section.add_warn(
-                "No session_id directories were found under original_sessions/",
+                "No session_id directories were found under Session zip/",
                 self._rel(sessions_dir),
             )
             return
@@ -1581,7 +1579,7 @@ class SessionsValidator(SectionValidator):
         )
         if not jsonl_files:
             section.add_warn(
-                "No jsonl files found under original_sessions; forbidden keyword check skipped",
+                "No jsonl files found under Session zip; forbidden keyword check skipped",
                 self._rel(sessions_dir),
             )
             return
@@ -1606,7 +1604,7 @@ class SessionsValidator(SectionValidator):
                 )
         if findings == 0:
             section.add_pass(
-                "No forbidden keywords detected in original_sessions/*.jsonl",
+                "No forbidden keywords detected in Session zip/*.jsonl",
                 self._rel(sessions_dir),
             )
 
@@ -1808,7 +1806,7 @@ class Validator:
         metadata = MetadataValidator(root).validate(metadata_section)
         section_number += 1
 
-        sessions_section = self._new_section(f"{section_number}. original_sessions")
+        sessions_section = self._new_section(f"{section_number}. Session zip")
         SessionsValidator(root, metadata).validate(sessions_section)
         section_number += 1
 
