@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+from wsgiref import headers
 
 import requests
 
@@ -58,73 +59,86 @@ def build_header_map(headers: list[Any]) -> dict[str, int]:
 
 
 def row_to_record(row: tuple[Any, ...], header_map: dict[str, int]) -> dict[str, str] | None:
-	if "ID" not in header_map:
-		return None
+    if "ID" not in header_map:
+        return None
 
-	mindflow_id = clean_value(row[header_map["ID"]])
-	prompt_text = clean_value(row[header_map["prompt"]]) if "prompt" in header_map else ""
-	project_type = clean_value(row[header_map["types"]]) if "types" in header_map else ""
+    if not any(clean_value(cell) for cell in row):
+        return None
 
-	model = "Claude Opus"
+    mindflow_id = clean_value(row[header_map["ID"]])
+    prompt_text = (
+        clean_value(row[header_map["prompt"]]) if "prompt" in header_map else ""
+    )
+    project_type = (
+        clean_value(row[header_map["types"]]) if "types" in header_map else ""
+    )
 
-	frontend_stack = (
-		clean_value(row[header_map["frontend_tech_stack"]])
-		if "frontend_tech_stack" in header_map
-		else ""
-	)
-	backend_stack = (
+    model = "Claude Opus"
+
+    frontend_stack = (
+        clean_value(row[header_map["frontend_tech_stack"]])
+        if "frontend_tech_stack" in header_map
+        else ""
+    )
+    backend_stack = (
 		clean_value(row[header_map["backend_tech_stack"]])
 		if "backend_tech_stack" in header_map
 		else ""
 	)
-	database = clean_value(row[header_map["database"]]) if "database" in header_map else ""
+    database = (
+        clean_value(row[header_map["database"]]) if "database" in header_map else ""
+    )
 
-	if not any(
-		[
-			mindflow_id,
-			prompt_text,
-			project_type,
-			model,
-			frontend_stack,
-			backend_stack,
-			database,
-		]
-	):
-		return None
+    if not any(
+        [
+            mindflow_id,
+            prompt_text,
+            project_type,
+            frontend_stack,
+            backend_stack,
+            database,
+        ]
+    ):
+        return None
 
-	return {
-		"mindflow_id": mindflow_id,
-		"prompt_text": prompt_text,
-		"project_type": project_type,
-		"model": model,
-		"frontend_tech_stack": frontend_stack,
-		"backend_stack": backend_stack,
-		"database": database,
-	}
+    return {
+        "mindflow_id": mindflow_id,
+        "prompt_text": prompt_text,
+        "project_type": project_type,
+        "model": model,
+        "frontend_tech_stack": frontend_stack,
+        "backend_stack": backend_stack,
+        "database": database,
+    }
 
 
 def convert_workbook(excel_path: Path) -> list[dict[str, str]]:
-	workbook = load_workbook(excel_path, read_only=True, data_only=True)
-	records: list[dict[str, str]] = []
+    workbook = load_workbook(excel_path, read_only=True, data_only=True)
+    records: list[dict[str, str]] = []
 
-	for sheet_name in workbook.sheetnames:
-		worksheet = workbook[sheet_name]
-		rows = worksheet.iter_rows(values_only=True)
-		try:
-			headers = list(next(rows))
-		except StopIteration:
-			continue
+    for sheet_name in workbook.sheetnames:
+        worksheet = workbook[sheet_name]
+        rows = worksheet.iter_rows(values_only=True)
+        try:
+            headers = list(next(rows))
+            print(f"Processing sheet: {sheet_name} with headers: {headers}")
+        except StopIteration:
+            continue
 
-		header_map = build_header_map(headers)
-		if not REQUIRED_COLUMNS.issubset(header_map.keys()):
-			continue
+        header_map = build_header_map(headers)
+        if not REQUIRED_COLUMNS.issubset(header_map.keys()):
+            print(
+                f"Skipping sheet '{sheet_name}' - missing required columns: "
+                f"{REQUIRED_COLUMNS - set(header_map.keys())}"
+            )
+            continue
 
-		for row in rows:
-			record = row_to_record(row, header_map)
-			if record is not None:
-				records.append(record)
+        for row in rows:
+            record = row_to_record(row, header_map)
+            if record is not None:
+                records.append(record)
 
-	return records
+    return records
 
 
 def load_bearer_token(cli_token: str | None, token_file: Path | None) -> str | None:
@@ -143,31 +157,39 @@ def send_tasks(
 	batch_no: str,
 	timeout: float,
 ) -> tuple[int, int]:
-	headers = {"Authorization": f"Bearer {bearer_token}"}
-	success_count = 0
-	failure_count = 0
+    headers = {"Authorization": f"Bearer {bearer_token}"}
+    success_count = 0
+    failure_count = 0
 
-	for task in tasks:
-		payload = dict(task)
-		payload["batch_no"] = batch_no
-		task_identifier = payload.get("mindflow_id", "unknown")
+    for i, task in enumerate(tasks):
+        payload = dict(task)
+        payload["batch_no"] = batch_no
+        payload["task_id"] = f"w{batch_no}t{i+1}"
+        task_identifier = payload.get("mindflow_id", "unknown")
 
-		try:
-			response = requests.post(endpoint_url, json=payload, headers=headers, timeout=timeout)
-			if response.status_code in (200, 201):
-				success_count += 1
-				print(f"Successfully sent mindflow_id: {task_identifier}")
-			else:
-				failure_count += 1
-				print(
-					f"Failed to send mindflow_id: {task_identifier} | "
-					f"Status: {response.status_code}"
-				)
-		except requests.exceptions.RequestException as exc:
-			failure_count += 1
-			print(f"Connection error for mindflow_id {task_identifier}: {exc}")
+        try:
+            response = requests.post(
+                endpoint_url, json=payload, headers=headers, timeout=timeout
+            )
+            if response.status_code in (200, 201):
+                success_count += 1
+                print(
+                    f"Successfully sent mindflow_id: {task_identifier}, task_id: {payload['task_id']}"
+                )
+            else:
+                failure_count += 1
+                print(
+                    f"Failed to send mindflow_id: {task_identifier}, task_id: {payload['task_id']} | "
+                    f"Status: {response.status_code}"
+                )
+                print(f"Response: {response.text}")
+        except requests.exceptions.RequestException as exc:
+            failure_count += 1
+            print(
+                f"Connection error for mindflow_id {task_identifier}, task_id: {payload['task_id']}: {exc}"
+            )
 
-	return success_count, failure_count
+    return success_count, failure_count
 
 
 def parse_args() -> argparse.Namespace:
