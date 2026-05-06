@@ -4,6 +4,7 @@ __pycache__
 .venv/
 .claude/
 
-*.txt
+ids.txt
+token.txt
 task_exports/
 _task_export_work/

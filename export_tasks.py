@@ -274,7 +274,10 @@ Override the Aquila endpoint (e.g. local API):
 from __future__ import annotations
 
 import argparse
+import asyncio
+import ast
 import http.cookiejar
+import io
 import json
 import logging
 import os
@@ -291,8 +294,10 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import tokenize
 
 from normalize_sessions_zip import run_original_sessions_dir
+from translate_shell.translate import translate
 
 
 DEFAULT_TASK_URL_TEMPLATE = "https://api.aquila-core.net/api/v1/mindflow-tasks/mindflow-id/{task_id}"
@@ -305,6 +310,54 @@ GIT_ARTIFACT_NAMES = {
     ".github",
 }
 ZIP_NOISE_NAMES = {"__macosx", ".ds_store"}
+CHINESE_CHAR_RE = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]")
+CHINESE_SEGMENT_RE = re.compile(
+    r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF][\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF"
+    r"\u3000-\u303F\uFF00-\uFFEF\s]*"
+)
+REPO_TEXT_CLEANUP_SKIP_DIR_NAMES = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".idea",
+    ".vscode",
+    "__pycache__",
+    "node_modules",
+    "venv",
+    ".venv",
+    "env",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    ".cache",
+    ".turbo",
+    ".parcel-cache",
+    "coverage",
+    "htmlcov",
+}
+SAFE_FULL_TEXT_REPO_EXTENSIONS = {
+    ".md",
+    ".mdx",
+    ".txt",
+    ".rst",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".css",
+    ".scss",
+    ".less",
+    ".html",
+    ".htm",
+    ".xml",
+    ".svg",
+    ".csv",
+}
 
 log = logging.getLogger("export_tasks")
 
@@ -389,6 +442,338 @@ def first_non_empty(values: list[Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def contains_chinese_text(value: str) -> bool:
+    return bool(CHINESE_CHAR_RE.search(value))
+
+
+async def _translate_text_async(
+    text: str, source_lang: str = "zh-cn", target_lang: str = "en"
+) -> str:
+    translation = await translate(text, target_lang, source_lang)
+    results = getattr(translation, "results", None) or []
+    if not results:
+        return ""
+    paraphrase = getattr(results[0], "paraphrase", "")
+    return paraphrase.strip() if isinstance(paraphrase, str) else ""
+
+
+def translate_text_sync(
+    text: str,
+    cache: dict[str, str],
+    source_lang: str = "zh-cn",
+    target_lang: str = "en",
+) -> str:
+    cached = cache.get(text)
+    if cached is not None:
+        return cached
+
+    translated = asyncio.run(
+        _translate_text_async(text, source_lang=source_lang, target_lang=target_lang)
+    )
+    cache[text] = translated
+    return translated
+
+
+def replace_chinese_segments_in_text(
+    text: str, cache: dict[str, str]
+) -> tuple[str, int, int]:
+    if not text or not contains_chinese_text(text):
+        return text, 0, 0
+
+    replacements = 0
+    translated_segments = 0
+
+    def _replace(match: re.Match[str]) -> str:
+        nonlocal replacements, translated_segments
+        segment = match.group(0)
+        stripped = segment.strip()
+        if not stripped or not contains_chinese_text(stripped):
+            return segment
+        translated = translate_text_sync(stripped, cache)
+        if not translated:
+            return segment
+        translated_segments += 1
+        replacements += 1
+        prefix_len = len(segment) - len(segment.lstrip())
+        suffix_len = len(segment) - len(segment.rstrip())
+        prefix = segment[:prefix_len]
+        suffix = segment[len(segment) - suffix_len :] if suffix_len else ""
+        return f"{prefix}{translated}{suffix}"
+
+    updated = CHINESE_SEGMENT_RE.sub(_replace, text)
+    return updated, replacements, translated_segments
+
+
+def translate_chinese_strings_in_payload(
+    value: Any, cache: dict[str, str]
+) -> tuple[Any, int, int]:
+    if isinstance(value, dict):
+        changed = 0
+        translated_segments = 0
+        updated: dict[Any, Any] = {}
+        for key, item in value.items():
+            new_item, item_changed, item_segments = (
+                translate_chinese_strings_in_payload(item, cache)
+            )
+            updated[key] = new_item
+            changed += item_changed
+            translated_segments += item_segments
+        return updated, changed, translated_segments
+
+    if isinstance(value, list):
+        changed = 0
+        translated_segments = 0
+        updated_items: list[Any] = []
+        for item in value:
+            new_item, item_changed, item_segments = (
+                translate_chinese_strings_in_payload(item, cache)
+            )
+            updated_items.append(new_item)
+            changed += item_changed
+            translated_segments += item_segments
+        return updated_items, changed, translated_segments
+
+    if isinstance(value, str):
+        updated, replacements, translated_segments = replace_chinese_segments_in_text(
+            value, cache
+        )
+        return updated, replacements, translated_segments
+
+    return value, 0, 0
+
+
+def translate_chinese_text_in_sessions(root: Path) -> dict[str, Any]:
+    cache: dict[str, str] = {}
+    files_changed = 0
+    changed_fields = 0
+    translated_segments = 0
+    parse_errors = 0
+    changed_files: list[str] = []
+
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".json", ".jsonl"}:
+            continue
+
+        if path.suffix.lower() == ".jsonl":
+            try:
+                raw_text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                log.warning("chinese cleanup: cannot read %s: %s", path, exc)
+                continue
+
+            lines = raw_text.splitlines()
+            out_lines: list[str] = []
+            file_changed = False
+
+            for line in lines:
+                if not line.strip():
+                    out_lines.append(line)
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    parse_errors += 1
+                    out_lines.append(line)
+                    continue
+
+                updated_payload, line_changed, line_segments = (
+                    translate_chinese_strings_in_payload(payload, cache)
+                )
+                changed_fields += line_changed
+                translated_segments += line_segments
+                if line_changed > 0:
+                    file_changed = True
+                    out_lines.append(
+                        json.dumps(
+                            updated_payload, ensure_ascii=False, separators=(",", ":")
+                        )
+                    )
+                else:
+                    out_lines.append(line)
+
+            if file_changed:
+                path.write_text(
+                    "\n".join(out_lines) + ("\n" if raw_text.endswith("\n") else ""),
+                    encoding="utf-8",
+                )
+                files_changed += 1
+                changed_files.append(str(path))
+            continue
+
+        try:
+            raw_text = path.read_text(encoding="utf-8", errors="replace")
+            payload = json.loads(raw_text)
+        except Exception:
+            parse_errors += 1
+            continue
+
+        updated_payload, file_changed, file_segments = (
+            translate_chinese_strings_in_payload(payload, cache)
+        )
+        changed_fields += file_changed
+        translated_segments += file_segments
+        if file_changed > 0:
+            path.write_text(
+                json.dumps(updated_payload, ensure_ascii=False, separators=(",", ":"))
+                + ("\n" if raw_text.endswith("\n") else ""),
+                encoding="utf-8",
+            )
+            files_changed += 1
+            changed_files.append(str(path))
+
+    return {
+        "files_changed": files_changed,
+        "changed_fields": changed_fields,
+        "translated_segments": translated_segments,
+        "parse_errors": parse_errors,
+        "cache_entries": len(cache),
+        "changed_files": changed_files,
+        "error": "",
+    }
+
+
+def _is_probably_binary_file(path: Path) -> bool:
+    try:
+        sample = path.read_bytes()[:4096]
+    except OSError:
+        return True
+    return b"\x00" in sample
+
+
+def _should_skip_repo_text_cleanup(path: Path, repo_dir: Path) -> bool:
+    try:
+        rel_parts = path.relative_to(repo_dir).parts
+    except ValueError:
+        return True
+    if not rel_parts:
+        return True
+    if "original_sessions" in rel_parts:
+        return True
+    return any(part in REPO_TEXT_CLEANUP_SKIP_DIR_NAMES for part in rel_parts[:-1])
+
+
+def _translate_python_comments_and_strings(
+    raw_text: str, cache: dict[str, str]
+) -> tuple[str, int, int]:
+    changed_tokens = 0
+    translated_segments = 0
+    output_tokens: list[tokenize.TokenInfo] = []
+
+    for token_info in tokenize.generate_tokens(io.StringIO(raw_text).readline):
+        token_string = token_info.string
+        if token_info.type == tokenize.COMMENT and contains_chinese_text(token_string):
+            updated, replacements, segments = replace_chinese_segments_in_text(
+                token_string, cache
+            )
+            if replacements > 0:
+                token_info = token_info._replace(string=updated)
+                changed_tokens += replacements
+                translated_segments += segments
+        elif token_info.type == tokenize.STRING and contains_chinese_text(token_string):
+            lower = token_string.lower()
+            if "f" in lower[:2] or "b" in lower[:2]:
+                output_tokens.append(token_info)
+                continue
+            try:
+                literal_value = ast.literal_eval(token_string)
+            except Exception:
+                output_tokens.append(token_info)
+                continue
+            if not isinstance(literal_value, str) or not contains_chinese_text(
+                literal_value
+            ):
+                output_tokens.append(token_info)
+                continue
+            updated_value, replacements, segments = replace_chinese_segments_in_text(
+                literal_value, cache
+            )
+            if replacements > 0:
+                token_info = token_info._replace(string=repr(updated_value))
+                changed_tokens += replacements
+                translated_segments += segments
+        output_tokens.append(token_info)
+
+    return tokenize.untokenize(output_tokens), changed_tokens, translated_segments
+
+
+def _classify_repo_text_cleanup(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".py":
+        return "python"
+    if suffix in SAFE_FULL_TEXT_REPO_EXTENSIONS:
+        return "full"
+    return "full"
+
+
+def translate_chinese_text_in_repo_files(repo_dir: Path) -> dict[str, Any]:
+    cache: dict[str, str] = {}
+    files_changed = 0
+    translated_segments = 0
+    skipped_binary = 0
+    read_errors = 0
+    changed_files: list[str] = []
+
+    for path in sorted(repo_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        if _should_skip_repo_text_cleanup(path, repo_dir):
+            continue
+        mode = _classify_repo_text_cleanup(path)
+        if _is_probably_binary_file(path):
+            skipped_binary += 1
+            continue
+
+        try:
+            raw_text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            skipped_binary += 1
+            continue
+        except OSError as exc:
+            read_errors += 1
+            log.warning("repo chinese cleanup: cannot read %s: %s", path, exc)
+            continue
+
+        if not raw_text or not contains_chinese_text(raw_text):
+            continue
+
+        if mode == "python":
+            try:
+                updated_text, replacements, file_segments = (
+                    _translate_python_comments_and_strings(raw_text, cache)
+                )
+            except tokenize.TokenError as exc:
+                read_errors += 1
+                log.warning("repo chinese cleanup: cannot tokenize %s: %s", path, exc)
+                continue
+        else:
+            updated_text, replacements, file_segments = replace_chinese_segments_in_text(
+                raw_text, cache
+            )
+        if replacements == 0:
+            continue
+
+        try:
+            path.write_text(updated_text, encoding="utf-8")
+        except OSError as exc:
+            read_errors += 1
+            log.warning("repo chinese cleanup: cannot write %s: %s", path, exc)
+            continue
+
+        files_changed += 1
+        translated_segments += file_segments
+        changed_files.append(str(path))
+
+    return {
+        "files_changed": files_changed,
+        "translated_segments": translated_segments,
+        "skipped_binary": skipped_binary,
+        "read_errors": read_errors,
+        "cache_entries": len(cache),
+        "changed_files": changed_files,
+        "error": "",
+    }
 
 
 def http_get_json(url: str, bearer_token: str) -> Any:
@@ -1872,6 +2257,33 @@ def process_task(
     log.info("[%s] clone complete", task_id)
 
     aquila_prompt = detect_aquila_prompt(task)
+    prompt_translation_stats = {
+        "applied": False,
+        "replacements": 0,
+        "translated_segments": 0,
+        "error": "",
+    }
+    if aquila_prompt and contains_chinese_text(aquila_prompt):
+        try:
+            translated_prompt, replacements, translated_segments = (
+                replace_chinese_segments_in_text(aquila_prompt, {})
+            )
+            if replacements > 0:
+                aquila_prompt = translated_prompt
+                prompt_translation_stats = {
+                    "applied": True,
+                    "replacements": replacements,
+                    "translated_segments": translated_segments,
+                    "error": "",
+                }
+                log.info(
+                    "[%s] translated %d Chinese prompt segment(s) to English",
+                    task_id,
+                    translated_segments,
+                )
+        except Exception as exc:
+            prompt_translation_stats["error"] = str(exc)
+            log.warning("[%s] prompt Chinese cleanup failed: %s", task_id, exc)
     log.info("[%s] syncing metadata.json prompt with Aquila prompt_text", task_id)
     prompt_sync = sync_metadata_prompt_with_aquila(cloned_repo_dir, aquila_prompt)
     log.info("[%s] prompt sync: %s", task_id, prompt_sync)
@@ -1913,6 +2325,35 @@ def process_task(
         normalization_stats["changed_fields"],
         normalization_stats["parse_errors"],
     )
+    chinese_cleanup_stats = {
+        "files_changed": 0,
+        "changed_fields": 0,
+        "translated_segments": 0,
+        "parse_errors": 0,
+        "cache_entries": 0,
+        "changed_files": [],
+        "error": "",
+    }
+    log.info("[%s] translating Chinese segments in original_sessions", task_id)
+    try:
+        chinese_cleanup_stats = translate_chinese_text_in_sessions(original_sessions_dir)
+        log.info(
+            "[%s] chinese cleanup: files_changed=%d changed_fields=%d translated_segments=%d parse_errors=%d",
+            task_id,
+            chinese_cleanup_stats["files_changed"],
+            chinese_cleanup_stats["changed_fields"],
+            chinese_cleanup_stats["translated_segments"],
+            chinese_cleanup_stats["parse_errors"],
+        )
+        if chinese_cleanup_stats["changed_files"]:
+            log.debug(
+                "[%s] chinese-cleaned files: %s",
+                task_id,
+                chinese_cleanup_stats["changed_files"],
+            )
+    except Exception as exc:
+        chinese_cleanup_stats["error"] = str(exc)
+        log.warning("[%s] chinese cleanup failed: %s", task_id, exc)
 
     log.info("[%s] renaming session files to match sessionId field", task_id)
     rename_stats = rename_sessions_to_match_session_id(original_sessions_dir)
@@ -1939,6 +2380,38 @@ def process_task(
     )
     if cleanup_stats["changed_files"]:
         log.debug("[%s] cleaned files: %s", task_id, cleanup_stats["changed_files"])
+
+    repo_chinese_cleanup_stats = {
+        "files_changed": 0,
+        "translated_segments": 0,
+        "skipped_binary": 0,
+        "read_errors": 0,
+        "cache_entries": 0,
+        "changed_files": [],
+        "error": "",
+    }
+    log.info("[%s] translating Chinese segments in repo text files", task_id)
+    try:
+        repo_chinese_cleanup_stats = translate_chinese_text_in_repo_files(
+            cloned_repo_dir
+        )
+        log.info(
+            "[%s] repo chinese cleanup: files_changed=%d translated_segments=%d skipped_binary=%d read_errors=%d",
+            task_id,
+            repo_chinese_cleanup_stats["files_changed"],
+            repo_chinese_cleanup_stats["translated_segments"],
+            repo_chinese_cleanup_stats["skipped_binary"],
+            repo_chinese_cleanup_stats["read_errors"],
+        )
+        if repo_chinese_cleanup_stats["changed_files"]:
+            log.debug(
+                "[%s] repo chinese-cleaned files: %s",
+                task_id,
+                repo_chinese_cleanup_stats["changed_files"],
+            )
+    except Exception as exc:
+        repo_chinese_cleanup_stats["error"] = str(exc)
+        log.warning("[%s] repo chinese cleanup failed: %s", task_id, exc)
 
     validator_threshold, threshold_project_type = resolve_validator_cost_threshold(
         cloned_repo_dir
@@ -2199,6 +2672,16 @@ def process_task(
         "normalization_changed_lines": normalization_stats["changed_lines"],
         "normalization_changed_fields": normalization_stats["changed_fields"],
         "normalization_parse_errors": normalization_stats["parse_errors"],
+        "chinese_cleanup_files_changed": chinese_cleanup_stats["files_changed"],
+        "chinese_cleanup_changed_fields": chinese_cleanup_stats["changed_fields"],
+        "chinese_cleanup_translated_segments": chinese_cleanup_stats["translated_segments"],
+        "chinese_cleanup_parse_errors": chinese_cleanup_stats["parse_errors"],
+        "chinese_cleanup_error": chinese_cleanup_stats["error"],
+        "repo_chinese_cleanup_files_changed": repo_chinese_cleanup_stats["files_changed"],
+        "repo_chinese_cleanup_translated_segments": repo_chinese_cleanup_stats["translated_segments"],
+        "repo_chinese_cleanup_skipped_binary": repo_chinese_cleanup_stats["skipped_binary"],
+        "repo_chinese_cleanup_read_errors": repo_chinese_cleanup_stats["read_errors"],
+        "repo_chinese_cleanup_error": repo_chinese_cleanup_stats["error"],
         "validation_exit_code": validation_info["exit_code"],
         "validation_report_path": validation_info["report_path"],
         "validation_stdout_path": validation_info["stdout_path"],
@@ -2222,6 +2705,10 @@ def process_task(
         "prompt_sync_performed": prompt_sync.get("performed", False),
         "prompt_sync_updated": prompt_sync.get("updated", False),
         "prompt_sync_reason": prompt_sync.get("reason", ""),
+        "prompt_chinese_cleanup_applied": prompt_translation_stats["applied"],
+        "prompt_chinese_cleanup_replacements": prompt_translation_stats["replacements"],
+        "prompt_chinese_cleanup_translated_segments": prompt_translation_stats["translated_segments"],
+        "prompt_chinese_cleanup_error": prompt_translation_stats["error"],
         "project_info_sync_performed": project_info_sync.get("performed", False),
         "project_info_sync_fields_changed": project_info_sync.get("fields_changed", []),
         "validation_attempts": validation_attempts,
@@ -2361,6 +2848,14 @@ def main() -> int:
     total_changed_fields = 0
     total_parse_errors = 0
     total_git_artifacts_removed = 0
+    total_chinese_cleanup_files = 0
+    total_chinese_cleanup_fields = 0
+    total_chinese_cleanup_segments = 0
+    total_chinese_cleanup_parse_errors = 0
+    total_repo_chinese_cleanup_files = 0
+    total_repo_chinese_cleanup_segments = 0
+    total_repo_chinese_cleanup_skipped_binary = 0
+    total_repo_chinese_cleanup_read_errors = 0
     total_with_tmp = 0
     exit_code = 0
     run_error = ""
@@ -2464,6 +2959,28 @@ def main() -> int:
             total_changed_fields += int(result["normalization_changed_fields"])
             total_parse_errors += int(result["normalization_parse_errors"])
             total_git_artifacts_removed += int(result["git_artifacts_removed"])
+            total_chinese_cleanup_files += int(result["chinese_cleanup_files_changed"])
+            total_chinese_cleanup_fields += int(
+                result["chinese_cleanup_changed_fields"]
+            )
+            total_chinese_cleanup_segments += int(
+                result["chinese_cleanup_translated_segments"]
+            )
+            total_chinese_cleanup_parse_errors += int(
+                result["chinese_cleanup_parse_errors"]
+            )
+            total_repo_chinese_cleanup_files += int(
+                result["repo_chinese_cleanup_files_changed"]
+            )
+            total_repo_chinese_cleanup_segments += int(
+                result["repo_chinese_cleanup_translated_segments"]
+            )
+            total_repo_chinese_cleanup_skipped_binary += int(
+                result["repo_chinese_cleanup_skipped_binary"]
+            )
+            total_repo_chinese_cleanup_read_errors += int(
+                result["repo_chinese_cleanup_read_errors"]
+            )
 
             task_reports.append(
                 {
@@ -2516,6 +3033,14 @@ def main() -> int:
             "normalization_changed_lines": total_changed_lines,
             "normalization_changed_fields": total_changed_fields,
             "normalization_parse_errors": total_parse_errors,
+            "chinese_cleanup_files_changed": total_chinese_cleanup_files,
+            "chinese_cleanup_changed_fields": total_chinese_cleanup_fields,
+            "chinese_cleanup_translated_segments": total_chinese_cleanup_segments,
+            "chinese_cleanup_parse_errors": total_chinese_cleanup_parse_errors,
+            "repo_chinese_cleanup_files_changed": total_repo_chinese_cleanup_files,
+            "repo_chinese_cleanup_translated_segments": total_repo_chinese_cleanup_segments,
+            "repo_chinese_cleanup_skipped_binary": total_repo_chinese_cleanup_skipped_binary,
+            "repo_chinese_cleanup_read_errors": total_repo_chinese_cleanup_read_errors,
             "git_artifacts_removed": total_git_artifacts_removed,
             "exit_code": exit_code,
         },

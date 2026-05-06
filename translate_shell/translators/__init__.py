@@ -1,0 +1,219 @@
+"""Provide ``TRANSLATORS`` for shell completion."""
+
+import logging
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .llm._llama_cpp import LlamaTranslator
+    from .llm._openai import OpenaiTranslator
+    from .online.bing import BingTranslator
+    from .online.google import GoogleTranslator
+    from .online.haici import HaiciTranslator
+    from .online.youdaozhiyun import YoudaozhiyunTranslator
+    from .speaker import Speaker
+    from .stardict import StardictTranslator
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Translation:
+    """Translation."""
+
+    translator: str
+    sl: str
+    tl: str
+    text: str
+    phonetic: str = ""
+    paraphrase: str = ""
+    explains: dict[str, str] = field(default_factory=dict)
+    details: dict[str, dict[str, str]] = field(default_factory=dict)
+    alternatives: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Translator:
+    """Basic translator. All other translators must be its subclass."""
+
+    name: str
+
+    def create_translation(self, text: str, tl: str, sl: str) -> Translation:
+        """Create translation.
+
+        :param text:
+        :type text: str
+        :param tl:
+        :type tl: str
+        :param sl:
+        :type sl: str
+        :rtype: Translation
+        """
+        return Translation(self.name, sl, tl, text)
+
+    @staticmethod
+    def convert_langs(*langs: str) -> list[str]:
+        """Convert langs to URL friendly form.
+
+        :param langs:
+        :type langs: str
+        :rtype: list[str]
+        """
+        return [lang.lower().replace("_", "-") for lang in langs]
+
+    def __call__(
+        self, text: str, tl: str, sl: str, option: dict[str, Any]
+    ) -> Coroutine[Any, Any, Translation | None] | Translation | None:
+        """Call.
+
+        :param text:
+        :type text: str
+        :param tl:
+        :type tl: str
+        :param sl:
+        :type sl: str
+        :param option:
+        :type option: dict[str, Any]
+        :rtype: Translation | None
+        """
+        logger.warning(
+            self.name + " translator hasn't been implemented."
+            " Maybe you input a typo?"
+        )
+
+
+def get_dummy(name: str) -> Callable[[], Translator]:
+    """Get dummy.
+
+    :param name:
+    :type name: str
+    :rtype: Callable[[], Translator]
+    """
+
+    def _get_dummy() -> Translator:
+        """Define a temporary function.
+
+        :rtype: Translator
+        """
+        return Translator(name)
+
+    return _get_dummy
+
+
+def get_stardict() -> "StardictTranslator":
+    """Get stardict.
+
+    :rtype: StardictTranslator
+    """
+    from .stardict import StardictTranslator
+
+    return StardictTranslator()
+
+
+def get_speaker() -> "Speaker":
+    """Get speaker.
+
+    :rtype: Speaker
+    """
+    from .speaker import Speaker
+
+    return Speaker()
+
+
+def get_google() -> "GoogleTranslator":
+    """Get google.
+
+    :rtype: GoogleTranslator
+    """
+    from .online.google import GoogleTranslator
+
+    return GoogleTranslator()
+
+
+def get_youdaozhiyun() -> "YoudaozhiyunTranslator":
+    """Get youdaozhiyun.
+
+    :rtype: YoudaozhiyunTranslator
+    """
+    from .online.youdaozhiyun import YoudaozhiyunTranslator
+
+    return YoudaozhiyunTranslator()
+
+
+def get_bing() -> "BingTranslator":
+    """Get bing.
+
+    :rtype: BingTranslator
+    """
+    from .online.bing import BingTranslator
+
+    return BingTranslator()
+
+
+def get_haici() -> "HaiciTranslator":
+    """Get haici.
+
+    :rtype: HaiciTranslator
+    """
+    from .online.haici import HaiciTranslator
+
+    return HaiciTranslator()
+
+
+def get_youdao() -> Callable[[], Translator] | None:
+    """Get youdao.
+
+    :rtype: Callable[[], Translator] | None
+    """
+    logger.warning(
+        "youdao translator hasn't been implemented."
+        " Maybe you want to send a PR?"
+    )
+    return
+
+
+def get_yandex() -> Callable[[], Translator] | None:
+    """Get yandex.
+
+    :rtype: Callable[[], Translator] | None
+    """
+    logger.warning(
+        "yandex translator hasn't been implemented."
+        " Maybe you want to send a PR?"
+    )
+    return
+
+
+def get_openai() -> "OpenaiTranslator":
+    """Get openai.
+
+    :rtype: "OpenaiTranslator"
+    """
+    from .llm._openai import OpenaiTranslator
+
+    return OpenaiTranslator()
+
+
+def get_llama() -> "LlamaTranslator":
+    """Get llama.
+
+    :rtype: "LlamaTranslator"
+    """
+    from .llm._llama_cpp import LlamaTranslator
+
+    return LlamaTranslator()
+
+
+TRANSLATORS = {
+    "stardict": get_stardict,
+    "google": get_google,
+    "speaker": get_speaker,
+    "yandex": get_yandex,
+    "youdao": get_youdao,
+    "youdaozhiyun": get_youdaozhiyun,
+    "bing": get_bing,
+    "haici": get_haici,
+    "openai": get_openai,
+    "llama": get_llama,
+}

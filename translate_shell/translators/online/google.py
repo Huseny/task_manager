@@ -1,0 +1,141 @@
+"""Google Translator
+====================
+
+Refer https://github.com/voldikss/vim-translator
+https://support.google.com/translate
+"""
+
+import json
+from dataclasses import dataclass
+from typing import Any
+
+from .. import Translation
+from . import OnlineTranslator
+
+
+@dataclass
+class GoogleTranslator(OnlineTranslator):
+    """GoogleTranslator."""
+
+    name: str = "google"
+    host: str = "translate.googleapis.com"
+    cnhost: str = "translate.google.com.hk"
+
+    async def __call__(
+        self, text: str, tl: str, sl: str, option: dict[str, Any]
+    ) -> Translation | None:
+        """Call.
+
+        :param text:
+        :type text: str
+        :param tl:
+        :type tl: str
+        :param sl:
+        :type sl: str
+        :param option:
+        :type option: dict[str, Any]
+        :rtype: Translation | None
+        """
+        res = self.create_translation(text, tl, sl)
+        tl, sl = self.convert_langs(tl, sl)
+        http_host = self.cnhost if "zh" in tl else self.host
+        url = f"https://{http_host}/translate_a/single"
+        params = {
+            "client": "gtx",
+            "sl": sl,
+            "tl": tl,
+            "dt": ["at", "bd", "ex", "ld", "md", "qca", "rw", "rm", "ss", "t"],
+            "q": text,
+        }
+        session = option.get(self.name, {}).get("session", None)
+        resp = await self.http_get(url, session, params)
+        if not resp:
+            return None
+        obj = json.loads(resp)
+
+        res.paraphrase = self.get_paraphrase(obj)
+        res.explains = self.get_explains(obj)
+        res.phonetic = self.get_phonetic(obj)
+        res.details = self.get_details(obj)
+        res.alternatives = self.get_alternatives(obj)
+        return res
+
+    @staticmethod
+    def get_phonetic(obj: list[Any]) -> str:
+        """Get phonetic.
+
+        :param obj:
+        :type obj: list[Any]
+        :rtype: str
+        """
+        for x in obj[0]:
+            if len(x) == 4:
+                return x[3]
+        return ""
+
+    @staticmethod
+    def get_paraphrase(obj: list[Any]) -> str:
+        """Get paraphrase.
+
+        :param obj:
+        :type obj: list[Any]
+        :rtype: str
+        """
+        paraphrase = ""
+        for x in obj[0]:
+            if x[0]:
+                paraphrase += x[0]
+        return paraphrase
+
+    @staticmethod
+    def get_explains(obj: list[Any]) -> dict[str, str]:
+        """Get explains.
+
+        :param obj:
+        :type obj: list[Any]
+        :rtype: dict[str, str]
+        """
+        expls = {}
+        if obj[1]:
+            for x in obj[1]:
+                expls[x[0]] = ""
+                for i in x[2]:
+                    expls[x[0]] += i[0] + "; "
+        return expls
+
+    @staticmethod
+    def get_details(resp: list[Any]) -> dict[str, dict[str, str]]:
+        """Get details.
+
+        :param resp:
+        :type resp: list[Any]
+        :rtype: dict[str, dict[str, str]]
+        """
+        result = {}
+        if len(resp) < 13 or resp[12] is None:
+            return result
+        for x in resp[12]:
+            result[x[0]] = {}
+            for y in x[1]:
+                example = y[2] if len(y) > 2 and isinstance(y[2], str) else ""
+                result[x[0]][y[0]] = example
+        return result
+
+    def get_alternatives(self, resp: list[Any]) -> list[str]:
+        """Get alternatives.
+
+        :param resp:
+        :type resp: list[Any]
+        :rtype: list[str]
+        """
+        if len(resp) < 6 or resp[5] is None:
+            return []
+        definition = self.get_paraphrase(resp)
+        result = []
+        for x in resp[5]:
+            if x[2] is None:
+                continue
+            for i in x[2]:
+                if i[0] != definition:
+                    result.append(i[0])
+        return result
