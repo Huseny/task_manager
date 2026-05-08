@@ -45,11 +45,9 @@ For each task ID in --task-ids-file, this script:
      listing every offender.
  12. Moves the repo's `.tmp/` (if any) out to `<output>/TASK-<id>/.tmp` so
      it is excluded from the shipped zip.
- 13. Packages `original_sessions/` into a single zip, zips the cleaned repo,
-     and extracts that final TASK zip to a scratch dir for validation.
- 14. Runs `validate_package_direct_original_sessions.py` against the
-     extracted final package.
- 15. On pass: rebuilds the final TASK zip from the extracted package.
+ 13. Packages `original_sessions/` into a single zip.
+ 14. Runs `validate_packages.py` against the prepared task root.
+ 15. On pass: zips the validated task root once and ships that zip.
  16. Cleans up the per-task work dir (unless --keep-work-dir).
 
 Relationship to run_reconstruction_export_from_folder.py
@@ -108,8 +106,8 @@ CLI flags
                               randomly added to existing usage records until
                               the threshold is met. 0 disables. Default: 15.0.
     --keep-work-dir             Keep the work dir at end of run; useful for
-                                                            inspecting `<work>/<task>/_extract/validate_extract/`
-                                                            and `<work>/<task>/_validate/`.
+                                                            inspecting the validated task root and the
+                                                            mirrored validation artifacts under `_validate/`.
     --translate / --no-translate Enable or disable Chinese translation passes
                                                             for prompts, `original_sessions/`, and repo
                                                             text files. Default: enabled.
@@ -146,13 +144,12 @@ zip basename, and session JSONLs sit under that folder.
 
 Validation flow
 ---------------
-The flow extracts the just-built TASK zip into
-`<work>/<task>/_extract/validate_extract/` and runs the validator against
-that directory. Validation artifacts (report, stdout, stderr) are persisted
-to the output dir's `validation/` and mirrored into `<work>/<task>/_validate/`
-so the work dir's `_validate/` only ever holds artifacts -- the extracted
-package lives separately under `_extract/`. On the first pass the result is
-wrapped up; on failure behavior depends on `--interactive-validation`:
+After `original_sessions/` is repackaged into a single zip, the validator
+runs directly against the prepared task root. Validation artifacts (report,
+stdout, stderr) are persisted to the output dir's `validation/` and mirrored
+into `<work>/<task>/_validate/` so the work dir's `_validate/` only ever
+holds artifacts. On the first pass the result is wrapped up; on failure
+behavior depends on `--interactive-validation`:
 
   Without --interactive-validation (CI mode):
     - The TASK zip is deleted.
@@ -166,17 +163,17 @@ wrapped up; on failure behavior depends on `--interactive-validation`:
       [z] zip       - keep the zip anyway, mark task as success, repackage
                       from the (possibly hand-edited) extract.
       [r] retry     - re-run the validator AGAINST THE EXTRACT IN PLACE,
-                      so manual edits to the extracted package
+                      so manual edits to the prepared task tree
                       (including `original_sessions/`) are honored without
                       being clobbered by re-extraction.
 
-    Manual edits should be made under:
+    Manual edits should be made directly in the prepared task root under:
 
-        <work>/<task>/_extract/validate_extract/
+        <work>/<task>/<repo-name>/
 
     Edits to `original_sessions/` survive across retries. On final pass /
-    zip-anyway, the TASK zip is rebuilt from the extract, so manual edits
-    flow into the shipped zip.
+    zip-anyway, the TASK zip is built from that prepared tree, so manual
+    edits flow into the shipped zip.
 
 metadata.json sync rules
 ------------------------
@@ -2162,7 +2159,7 @@ def _prompt_validation_action(task_id: str, exc: Exception) -> str:
             print("  [s] skip      - mark task failed, delete zip, move on")
             print("  [z] zip       - keep the zip anyway and mark task as success")
             print(
-                "  [r] retry     - I have manually fixed the package; re-zip and re-validate"
+                "  [r] retry     - I have manually fixed the package; re-validate it in place"
             )
             choice = input("Action [s/z/r]: ").strip().lower()
         except EOFError:
@@ -2174,17 +2171,6 @@ def _prompt_validation_action(task_id: str, exc: Exception) -> str:
         if choice in ("r", "retry"):
             return "retry"
         print(f"Unrecognized choice: {choice!r}. Please enter s, z, or r.")
-
-
-def _extract_zip_for_validation(zip_path: Path, scratch_dir: Path) -> Path:
-    scratch_dir.mkdir(parents=True, exist_ok=True)
-    extract_root = scratch_dir / "validate_extract"
-    if extract_root.exists():
-        shutil.rmtree(extract_root)
-    extract_root.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(extract_root)
-    return extract_root
 
 
 def _run_validator_on_dir(
@@ -2269,6 +2255,7 @@ def process_task(
     min_token_cost_usd: float = DEFAULT_MIN_TOKEN_COST_USD,
     interactive_on_validation_failure: bool = False,
     translation_enabled: bool = True,
+    skip_repo_cleanliness_check: bool = False,
 ) -> dict[str, Any]:
     task_id = sanitize_name(extract_task_id(task))
     repo_url = detect_repo_url(task)
@@ -2523,42 +2510,50 @@ def process_task(
         log.debug("[%s] pruned paths: %s", task_id, prune_stats["removed_paths"])
 
     log.info("[%s] packaging original_sessions as a zip", task_id)
-    sessions_zip_info = package_sessions_dir_as_zip(original_sessions_dir)
-    log.info(
-        "[%s] sessions zip packaged as %s",
-        task_id,
-        sessions_zip_info.get("zip_name", ""),
-    )
+    sessions_zip_info = package_sessions_dir_as_zip(cloned_repo_dir)
+    if sessions_zip_info.get("performed", False):
+        log.info(
+            "[%s] sessions zip packaged as %s",
+            task_id,
+            sessions_zip_info.get("zip_name", ""),
+        )
+    else:
+        log.warning(
+            "[%s] sessions zip skipped (%s)",
+            task_id,
+            sessions_zip_info.get("reason", "unknown"),
+        )
 
-    log.info("[%s] checking repo cleanliness", task_id)
-    while True:
-        try:
-            assert_repo_clean(cloned_repo_dir)
-            log.info("[%s] repo cleanliness OK", task_id)
-            break
-        except RepoCleanlinessError as exc:
-            log.error("[%s] repo cleanliness FAILED: %s", task_id, exc)
-            if not interactive_on_validation_failure:
-                raise
+    if not skip_repo_cleanliness_check:
+        log.info("[%s] checking repo cleanliness", task_id)
+        while True:
+            try:
+                assert_repo_clean(cloned_repo_dir)
+                log.info("[%s] repo cleanliness OK", task_id)
+                break
+            except RepoCleanlinessError as exc:
+                log.error("[%s] repo cleanliness FAILED: %s", task_id, exc)
+                if not interactive_on_validation_failure:
+                    raise
 
-            print("")
-            print(f"[{task_id}] To fix manually, edit the cloned repo at:")
-            print(f"    {cloned_repo_dir}")
+                print("")
+                print(f"[{task_id}] To fix manually, edit the cloned repo at:")
+                print(f"    {cloned_repo_dir}")
 
-            choice = _prompt_validation_action(task_id, exc)
-            if choice == "skip":
-                raise
-            if choice == "zip":
-                log.warning(
-                    "[%s] user chose ZIP-ANYWAY; continuing despite repo cleanliness failure",
+                choice = _prompt_validation_action(task_id, exc)
+                if choice == "skip":
+                    raise
+                if choice == "zip":
+                    log.warning(
+                        "[%s] user chose ZIP-ANYWAY; continuing despite repo cleanliness failure",
+                        task_id,
+                    )
+                    break
+                log.info(
+                    "[%s] user chose RETRY; re-checking repo cleanliness",
                     task_id,
                 )
-                break
-            log.info(
-                "[%s] user chose RETRY; re-checking repo cleanliness",
-                task_id,
-            )
-            continue
+                continue
 
     task_output_dir = output_dir / f"TASK-{task_id}"
     task_output_dir.mkdir(parents=True, exist_ok=True)
@@ -2576,32 +2571,20 @@ def process_task(
     zip_path = task_output_dir / f"TASK-{task_id}.zip"
     if zip_path.exists():
         zip_path.unlink()
-    log.info("[%s] zipping package -> %s", task_id, zip_path)
-    zip_directory_contents(cloned_repo_dir, zip_path)
-    log.info(
-        "[%s] zip complete (%d bytes)",
-        task_id,
-        zip_path.stat().st_size,
-    )
 
     # Output dir holds the artifacts the user takes; work dir mirrors them
     # under `_validate/` so they're easy to find when --keep-work-dir is used.
-    # The extract lives under `_extract/` so `_validate/` only ever contains
-    # validation artifacts (report + logs), not the extracted repo.
     validation_persist_dir = task_output_dir / "validation"
     validation_artifacts_dir = task_work_dir / "_validate"
-    validation_extract_parent = task_work_dir / "_extract"
     validation_info: dict[str, Any] | None = None
     validation_outcome = "passed"
     validation_attempts = 0
 
     log.info(
-        "[%s] extracting final zip for validation -> %s",
+        "[%s] validating prepared task root -> %s",
         task_id,
-        validation_extract_parent / "validate_extract",
+        cloned_repo_dir,
     )
-    extract_root = _extract_zip_for_validation(zip_path, validation_extract_parent)
-
     try:
         while True:
             validation_attempts += 1
@@ -2609,11 +2592,11 @@ def process_task(
                 "[%s] running validator (attempt=%d) against %s",
                 task_id,
                 validation_attempts,
-                extract_root,
+                cloned_repo_dir,
             )
             try:
                 validation_info = _run_validator_on_dir(
-                    extract_root,
+                    cloned_repo_dir,
                     [validation_persist_dir, validation_artifacts_dir],
                     zip_path,
                 )
@@ -2622,20 +2605,19 @@ def process_task(
                     task_id,
                     validation_info["report_path"],
                 )
-                # Drop the validator's .tmp/ from the extract -- the report is
-                # already persisted under the task's validation/ folder.
-                if remove_validator_tmp(extract_root):
+                # Drop the validator's .tmp/ from the prepared tree -- the
+                # report is already persisted under the task's validation/
+                # folder.
+                if remove_validator_tmp(cloned_repo_dir):
                     log.debug(
-                        "[%s] removed validator .tmp/ from extract before repackage",
+                        "[%s] removed validator .tmp/ from task root before zipping",
                         task_id,
                     )
-                # Repackage from extract_root so any manual edits made during
-                # retry are reflected in the zip.
                 if zip_path.exists():
                     zip_path.unlink()
-                zip_directory_contents(extract_root, zip_path)
+                zip_directory_contents(cloned_repo_dir, zip_path)
                 log.info(
-                    "[%s] repackaged from validated extract (%d bytes)",
+                    "[%s] zipped validated task root (%d bytes)",
                     task_id,
                     zip_path.stat().st_size,
                 )
@@ -2653,9 +2635,11 @@ def process_task(
                     raise
 
                 print("")
-                print(f"[{task_id}] To fix manually, edit the extracted package at:")
-                print(f"    {extract_root}")
-                print(f"[{task_id}] (manual edits to this extracted package are honored on retry)")
+                print(f"[{task_id}] To fix manually, edit the prepared task tree at:")
+                print(f"    {cloned_repo_dir}")
+                print(
+                    f"[{task_id}] (manual edits to this prepared task tree are honored on retry)"
+                )
                 print(f"[{task_id}] Validation report:")
                 persisted_report = validation_persist_dir / "validation_report.md"
                 if persisted_report.is_file():
@@ -2676,17 +2660,17 @@ def process_task(
                     raise
                 if choice == "zip":
                     log.warning(
-                        "[%s] user chose ZIP-ANYWAY; repackaging extract despite validation failure",
+                        "[%s] user chose ZIP-ANYWAY; zipping prepared task root despite validation failure",
                         task_id,
                     )
-                    if remove_validator_tmp(extract_root):
+                    if remove_validator_tmp(cloned_repo_dir):
                         log.debug(
-                            "[%s] removed validator .tmp/ from extract before repackage",
+                            "[%s] removed validator .tmp/ from task root before zipping",
                             task_id,
                         )
                     if zip_path.exists():
                         zip_path.unlink()
-                    zip_directory_contents(extract_root, zip_path)
+                    zip_directory_contents(cloned_repo_dir, zip_path)
                     validation_info = {
                         "exit_code": 1,
                         "report_path": (
@@ -2702,12 +2686,11 @@ def process_task(
                 log.info(
                     "[%s] user chose RETRY; re-validating %s in place",
                     task_id,
-                    extract_root,
+                    cloned_repo_dir,
                 )
                 continue
     finally:
-        if not keep_work_dir and validation_extract_parent.exists():
-            shutil.rmtree(validation_extract_parent, ignore_errors=True)
+        pass
 
     assert validation_info is not None
 
@@ -2873,6 +2856,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Validation artifacts are mirrored under <work-dir>/<task>/_validate/."
         ),
     )
+    parser.add_argument(
+        "--skip-repo-cleanliness-check",
+        action="store_true",
+        help="Skip the repo cleanliness check.",
+    )
     return parser
 
 
@@ -2985,6 +2973,7 @@ def main() -> int:
                     min_token_cost_usd=args.min_token_cost_usd,
                     interactive_on_validation_failure=args.interactive_validation,
                     translation_enabled=args.translation_enabled,
+                    skip_repo_cleanliness_check=args.skip_repo_cleanliness_check,
                 )
             except PackageValidationError as exc:
                 failed += 1
