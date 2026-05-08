@@ -139,8 +139,8 @@ The basename is derived from the first non-empty `cwd` found in any session
 JSONL (memory.jsonl is skipped). The sanitization rule matches Claude:
 collapse any run of non-`[A-Za-z0-9._]` characters into a single `-`.
 
-The inner sessions zip is FLAT -- session JSONLs sit at its root, not under
-a wrapper folder.
+The inner sessions zip contains a top-level wrapper folder named after the
+zip basename, and session JSONLs sit under that folder.
 
 Validation flow
 ---------------
@@ -299,8 +299,9 @@ import tokenize
 from normalize_sessions_zip import run_original_sessions_dir
 from translate_shell.translate import translate
 
-
-DEFAULT_TASK_URL_TEMPLATE = "https://api.aquila-core.net/api/v1/mindflow-tasks/mindflow-id/{task_id}"
+DEFAULT_TASK_URL_TEMPLATE = (
+    "https://api.aquila-core.net/api/v1/mindflow-tasks/mindflow-id/{task_id}"
+)
 GITHUB_PAT_ENV_VAR = "GITHUB_PAT"
 DOTENV_FILENAME = ".env"
 GIT_ARTIFACT_NAMES = {
@@ -376,7 +377,7 @@ def _parse_dotenv(path: Path) -> dict[str, str]:
         if not line or line.startswith("#"):
             continue
         if line.startswith("export "):
-            line = line[len("export "):].lstrip()
+            line = line[len("export ") :].lstrip()
         if "=" not in line:
             continue
         key, _, value = line.partition("=")
@@ -748,8 +749,8 @@ def translate_chinese_text_in_repo_files(repo_dir: Path) -> dict[str, Any]:
                 log.warning("repo chinese cleanup: cannot tokenize %s: %s", path, exc)
                 continue
         else:
-            updated_text, replacements, file_segments = replace_chinese_segments_in_text(
-                raw_text, cache
+            updated_text, replacements, file_segments = (
+                replace_chinese_segments_in_text(raw_text, cache)
             )
         if replacements == 0:
             continue
@@ -839,13 +840,16 @@ def is_uuid_filename(stem: str) -> bool:
 
 
 def extract_task_id(task: dict[str, Any]) -> str:
-    return first_non_empty(
-        [
-            task.get("mindflow_id"),
-            task.get("task_id"),
-            task.get("id"),
-        ]
-    ) or "unknown_task"
+    return (
+        first_non_empty(
+            [
+                task.get("mindflow_id"),
+                task.get("task_id"),
+                task.get("id"),
+            ]
+        )
+        or "unknown_task"
+    )
 
 
 def detect_repo_url(task: dict[str, Any]) -> str | None:
@@ -1846,18 +1850,34 @@ def normalize_api_spec_filename(repo_dir: Path) -> dict[str, Any]:
 
 UNNECESSARY_PATH_NAMES = {
     # Virtualenvs
-    "venv", ".venv", "env",
+    "venv",
+    ".venv",
+    "env",
     # JS / Python deps + caches
     "node_modules",
-    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
     # IDE / editor state
-    ".idea", ".vscode",
+    ".idea",
+    ".vscode",
     # Build / framework caches
-    "dist", "build", ".next", ".nuxt", ".cache", ".turbo", ".parcel-cache",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    ".cache",
+    ".turbo",
+    ".parcel-cache",
     # Coverage / test artifacts
-    "coverage", ".nyc_output", "htmlcov",
+    "coverage",
+    ".nyc_output",
+    "htmlcov",
     # OS noise
-    ".DS_Store", "__MACOSX", "Thumbs.db",
+    ".DS_Store",
+    "__MACOSX",
+    "Thumbs.db",
 }
 
 # Subset of UNNECESSARY_PATH_NAMES safe to auto-delete before the cleanliness
@@ -1866,8 +1886,13 @@ UNNECESSARY_PATH_NAMES = {
 AUTO_PRUNE_PATH_NAMES = set(UNNECESSARY_PATH_NAMES)
 
 REPO_FORBIDDEN_SUBDIR_NAMES = {
-    ".tmp", "tmp", "temp", "_tmp",
-    "docs", "doc", "documentation",
+    ".tmp",
+    "tmp",
+    "temp",
+    "_tmp",
+    "docs",
+    "doc",
+    "documentation",
 }
 
 
@@ -2075,14 +2100,24 @@ def package_sessions_dir_as_zip(extract_root: Path) -> dict[str, Any]:
 
     # Build zip outside sessions_dir first so we don't archive the zip into
     # itself, then move it back inside after clearing the loose contents.
+    # The zip must contain a top-level wrapper folder named after `basename`.
     staging_zip = extract_root / f".{basename}.zip.tmp"
+    staging_root = extract_root / ".sessions_zip_staging"
+    staging_wrapper = staging_root / basename
     if staging_zip.exists():
         staging_zip.unlink()
+    if staging_root.exists():
+        shutil.rmtree(staging_root, ignore_errors=True)
+    staging_wrapper.mkdir(parents=True, exist_ok=True)
+
+    for child in list(sessions_dir.iterdir()):
+        shutil.move(str(child), str(staging_wrapper / child.name))
+
     with zipfile.ZipFile(staging_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(sessions_dir.rglob("*")):
+        for path in sorted(staging_wrapper.rglob("*")):
             if not path.is_file():
                 continue
-            arcname = path.relative_to(sessions_dir).as_posix()
+            arcname = path.relative_to(staging_root).as_posix()
             zf.write(path, arcname=arcname)
 
     for child in list(sessions_dir.iterdir()):
@@ -2090,6 +2125,8 @@ def package_sessions_dir_as_zip(extract_root: Path) -> dict[str, Any]:
             shutil.rmtree(child)
         else:
             child.unlink()
+
+    shutil.rmtree(staging_root, ignore_errors=True)
 
     target_zip = sessions_dir / f"{basename}.zip"
     if target_zip.exists():
@@ -2107,7 +2144,7 @@ def package_sessions_dir_as_zip(extract_root: Path) -> dict[str, Any]:
     }
 
 
-VALIDATOR_SCRIPT_NAME = "validate_package_direct_original_sessions.py"
+VALIDATOR_SCRIPT_NAME = "validate_package.py"
 
 
 class PackageValidationError(RuntimeError):
@@ -2164,9 +2201,7 @@ def _run_validator_on_dir(
 
     validator_path = Path(__file__).resolve().parent / VALIDATOR_SCRIPT_NAME
     if not validator_path.exists():
-        raise PackageValidationError(
-            f"Validator script not found: {validator_path}"
-        )
+        raise PackageValidationError(f"Validator script not found: {validator_path}")
 
     primary_dir = persist_dirs[0]
     primary_dir.mkdir(parents=True, exist_ok=True)
@@ -2218,7 +2253,9 @@ def _run_validator_on_dir(
 
 def write_report(report_path: Path, payload: dict[str, Any]) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    report_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
 
 
 def process_task(
@@ -2336,7 +2373,9 @@ def process_task(
     }
     log.info("[%s] translating Chinese segments in original_sessions", task_id)
     try:
-        chinese_cleanup_stats = translate_chinese_text_in_sessions(original_sessions_dir)
+        chinese_cleanup_stats = translate_chinese_text_in_sessions(
+            original_sessions_dir
+        )
         log.info(
             "[%s] chinese cleanup: files_changed=%d changed_fields=%d translated_segments=%d parse_errors=%d",
             task_id,
@@ -2481,9 +2520,7 @@ def process_task(
                 raise
 
             print("")
-            print(
-                f"[{task_id}] To fix manually, edit the cloned repo at:"
-            )
+            print(f"[{task_id}] To fix manually, edit the cloned repo at:")
             print(f"    {cloned_repo_dir}")
 
             choice = _prompt_validation_action(task_id, exc)
@@ -2674,12 +2711,20 @@ def process_task(
         "normalization_parse_errors": normalization_stats["parse_errors"],
         "chinese_cleanup_files_changed": chinese_cleanup_stats["files_changed"],
         "chinese_cleanup_changed_fields": chinese_cleanup_stats["changed_fields"],
-        "chinese_cleanup_translated_segments": chinese_cleanup_stats["translated_segments"],
+        "chinese_cleanup_translated_segments": chinese_cleanup_stats[
+            "translated_segments"
+        ],
         "chinese_cleanup_parse_errors": chinese_cleanup_stats["parse_errors"],
         "chinese_cleanup_error": chinese_cleanup_stats["error"],
-        "repo_chinese_cleanup_files_changed": repo_chinese_cleanup_stats["files_changed"],
-        "repo_chinese_cleanup_translated_segments": repo_chinese_cleanup_stats["translated_segments"],
-        "repo_chinese_cleanup_skipped_binary": repo_chinese_cleanup_stats["skipped_binary"],
+        "repo_chinese_cleanup_files_changed": repo_chinese_cleanup_stats[
+            "files_changed"
+        ],
+        "repo_chinese_cleanup_translated_segments": repo_chinese_cleanup_stats[
+            "translated_segments"
+        ],
+        "repo_chinese_cleanup_skipped_binary": repo_chinese_cleanup_stats[
+            "skipped_binary"
+        ],
         "repo_chinese_cleanup_read_errors": repo_chinese_cleanup_stats["read_errors"],
         "repo_chinese_cleanup_error": repo_chinese_cleanup_stats["error"],
         "validation_exit_code": validation_info["exit_code"],
@@ -2707,7 +2752,9 @@ def process_task(
         "prompt_sync_reason": prompt_sync.get("reason", ""),
         "prompt_chinese_cleanup_applied": prompt_translation_stats["applied"],
         "prompt_chinese_cleanup_replacements": prompt_translation_stats["replacements"],
-        "prompt_chinese_cleanup_translated_segments": prompt_translation_stats["translated_segments"],
+        "prompt_chinese_cleanup_translated_segments": prompt_translation_stats[
+            "translated_segments"
+        ],
         "prompt_chinese_cleanup_error": prompt_translation_stats["error"],
         "project_info_sync_performed": project_info_sync.get("performed", False),
         "project_info_sync_fields_changed": project_info_sync.get("fields_changed", []),
@@ -2718,7 +2765,9 @@ def process_task(
         "sessions_zip_reason": sessions_zip_info.get("reason", ""),
         "api_spec_renamed_count": api_spec_stats["renamed_count"],
         "api_spec_renamed_files": api_spec_stats["renamed_files"],
-        "api_spec_skipped_already_canonical": api_spec_stats["skipped_already_canonical"],
+        "api_spec_skipped_already_canonical": api_spec_stats[
+            "skipped_already_canonical"
+        ],
         "api_spec_skipped_conflict_count": api_spec_stats["skipped_conflict_count"],
     }
 
