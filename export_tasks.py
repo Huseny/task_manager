@@ -45,12 +45,11 @@ For each task ID in --task-ids-file, this script:
      listing every offender.
  12. Moves the repo's `.tmp/` (if any) out to `<output>/TASK-<id>/.tmp` so
      it is excluded from the shipped zip.
- 13. Zips the cleaned repo, then extracts it to a scratch dir for validation.
+ 13. Packages `original_sessions/` into a single zip, zips the cleaned repo,
+     and extracts that final TASK zip to a scratch dir for validation.
  14. Runs `validate_package_direct_original_sessions.py` against the
-     extracted directory.
- 15. On pass: replaces `original_sessions/` in the extract with a
-     Claude-project-named zip (e.g. `-home-husen-...-TASK-req-xxx.zip`)
-     and rebuilds the final TASK zip from the extract.
+     extracted final package.
+ 15. On pass: rebuilds the final TASK zip from the extracted package.
  16. Cleans up the per-task work dir (unless --keep-work-dir).
 
 Relationship to run_reconstruction_export_from_folder.py
@@ -108,9 +107,12 @@ CLI flags
                               (USD) per task; below this, input_tokens are
                               randomly added to existing usage records until
                               the threshold is met. 0 disables. Default: 15.0.
-  --keep-work-dir             Keep the work dir at end of run; useful for
-                              inspecting `<work>/<task>/_extract/validate_extract/`
-                              and `<work>/<task>/_validate/`.
+    --keep-work-dir             Keep the work dir at end of run; useful for
+                                                            inspecting `<work>/<task>/_extract/validate_extract/`
+                                                            and `<work>/<task>/_validate/`.
+    --translate / --no-translate Enable or disable Chinese translation passes
+                                                            for prompts, `original_sessions/`, and repo
+                                                            text files. Default: enabled.
   -v, --verbose               Enable DEBUG-level logging.
 
 Output layout
@@ -2266,6 +2268,7 @@ def process_task(
     keep_work_dir: bool = False,
     min_token_cost_usd: float = DEFAULT_MIN_TOKEN_COST_USD,
     interactive_on_validation_failure: bool = False,
+    translation_enabled: bool = True,
 ) -> dict[str, Any]:
     task_id = sanitize_name(extract_task_id(task))
     repo_url = detect_repo_url(task)
@@ -2300,7 +2303,7 @@ def process_task(
         "translated_segments": 0,
         "error": "",
     }
-    if aquila_prompt and contains_chinese_text(aquila_prompt):
+    if translation_enabled and aquila_prompt and contains_chinese_text(aquila_prompt):
         try:
             translated_prompt, replacements, translated_segments = (
                 replace_chinese_segments_in_text(aquila_prompt, {})
@@ -2321,6 +2324,8 @@ def process_task(
         except Exception as exc:
             prompt_translation_stats["error"] = str(exc)
             log.warning("[%s] prompt Chinese cleanup failed: %s", task_id, exc)
+    elif not translation_enabled:
+        log.info("[%s] translation disabled; skipping prompt cleanup", task_id)
     log.info("[%s] syncing metadata.json prompt with Aquila prompt_text", task_id)
     prompt_sync = sync_metadata_prompt_with_aquila(cloned_repo_dir, aquila_prompt)
     log.info("[%s] prompt sync: %s", task_id, prompt_sync)
@@ -2371,28 +2376,34 @@ def process_task(
         "changed_files": [],
         "error": "",
     }
-    log.info("[%s] translating Chinese segments in original_sessions", task_id)
-    try:
-        chinese_cleanup_stats = translate_chinese_text_in_sessions(
-            original_sessions_dir
-        )
-        log.info(
-            "[%s] chinese cleanup: files_changed=%d changed_fields=%d translated_segments=%d parse_errors=%d",
-            task_id,
-            chinese_cleanup_stats["files_changed"],
-            chinese_cleanup_stats["changed_fields"],
-            chinese_cleanup_stats["translated_segments"],
-            chinese_cleanup_stats["parse_errors"],
-        )
-        if chinese_cleanup_stats["changed_files"]:
-            log.debug(
-                "[%s] chinese-cleaned files: %s",
-                task_id,
-                chinese_cleanup_stats["changed_files"],
+    if translation_enabled:
+        log.info("[%s] translating Chinese segments in original_sessions", task_id)
+        try:
+            chinese_cleanup_stats = translate_chinese_text_in_sessions(
+                original_sessions_dir
             )
-    except Exception as exc:
-        chinese_cleanup_stats["error"] = str(exc)
-        log.warning("[%s] chinese cleanup failed: %s", task_id, exc)
+            log.info(
+                "[%s] chinese cleanup: files_changed=%d changed_fields=%d translated_segments=%d parse_errors=%d",
+                task_id,
+                chinese_cleanup_stats["files_changed"],
+                chinese_cleanup_stats["changed_fields"],
+                chinese_cleanup_stats["translated_segments"],
+                chinese_cleanup_stats["parse_errors"],
+            )
+            if chinese_cleanup_stats["changed_files"]:
+                log.debug(
+                    "[%s] chinese-cleaned files: %s",
+                    task_id,
+                    chinese_cleanup_stats["changed_files"],
+                )
+        except Exception as exc:
+            chinese_cleanup_stats["error"] = str(exc)
+            log.warning("[%s] chinese cleanup failed: %s", task_id, exc)
+    else:
+        log.info(
+            "[%s] translation disabled; skipping original_sessions Chinese cleanup",
+            task_id,
+        )
 
     log.info("[%s] renaming session files to match sessionId field", task_id)
     rename_stats = rename_sessions_to_match_session_id(original_sessions_dir)
@@ -2429,28 +2440,31 @@ def process_task(
         "changed_files": [],
         "error": "",
     }
-    log.info("[%s] translating Chinese segments in repo text files", task_id)
-    try:
-        repo_chinese_cleanup_stats = translate_chinese_text_in_repo_files(
-            cloned_repo_dir
-        )
-        log.info(
-            "[%s] repo chinese cleanup: files_changed=%d translated_segments=%d skipped_binary=%d read_errors=%d",
-            task_id,
-            repo_chinese_cleanup_stats["files_changed"],
-            repo_chinese_cleanup_stats["translated_segments"],
-            repo_chinese_cleanup_stats["skipped_binary"],
-            repo_chinese_cleanup_stats["read_errors"],
-        )
-        if repo_chinese_cleanup_stats["changed_files"]:
-            log.debug(
-                "[%s] repo chinese-cleaned files: %s",
-                task_id,
-                repo_chinese_cleanup_stats["changed_files"],
+    if translation_enabled:
+        log.info("[%s] translating Chinese segments in repo text files", task_id)
+        try:
+            repo_chinese_cleanup_stats = translate_chinese_text_in_repo_files(
+                cloned_repo_dir
             )
-    except Exception as exc:
-        repo_chinese_cleanup_stats["error"] = str(exc)
-        log.warning("[%s] repo chinese cleanup failed: %s", task_id, exc)
+            log.info(
+                "[%s] repo chinese cleanup: files_changed=%d translated_segments=%d skipped_binary=%d read_errors=%d",
+                task_id,
+                repo_chinese_cleanup_stats["files_changed"],
+                repo_chinese_cleanup_stats["translated_segments"],
+                repo_chinese_cleanup_stats["skipped_binary"],
+                repo_chinese_cleanup_stats["read_errors"],
+            )
+            if repo_chinese_cleanup_stats["changed_files"]:
+                log.debug(
+                    "[%s] repo chinese-cleaned files: %s",
+                    task_id,
+                    repo_chinese_cleanup_stats["changed_files"],
+                )
+        except Exception as exc:
+            repo_chinese_cleanup_stats["error"] = str(exc)
+            log.warning("[%s] repo chinese cleanup failed: %s", task_id, exc)
+    else:
+        log.info("[%s] translation disabled; skipping repo Chinese cleanup", task_id)
 
     validator_threshold, threshold_project_type = resolve_validator_cost_threshold(
         cloned_repo_dir
@@ -2507,6 +2521,14 @@ def process_task(
     )
     if prune_stats["removed_paths"]:
         log.debug("[%s] pruned paths: %s", task_id, prune_stats["removed_paths"])
+
+    log.info("[%s] packaging original_sessions as a zip", task_id)
+    sessions_zip_info = package_sessions_dir_as_zip(original_sessions_dir)
+    log.info(
+        "[%s] sessions zip packaged as %s",
+        task_id,
+        sessions_zip_info.get("zip_name", ""),
+    )
 
     log.info("[%s] checking repo cleanliness", task_id)
     while True:
@@ -2574,12 +2596,11 @@ def process_task(
     validation_attempts = 0
 
     log.info(
-        "[%s] extracting zip for validation -> %s",
+        "[%s] extracting final zip for validation -> %s",
         task_id,
         validation_extract_parent / "validate_extract",
     )
     extract_root = _extract_zip_for_validation(zip_path, validation_extract_parent)
-    sessions_zip_info: dict[str, Any] = {"performed": False, "reason": "not_run"}
 
     try:
         while True:
@@ -2601,9 +2622,6 @@ def process_task(
                     task_id,
                     validation_info["report_path"],
                 )
-                # Replace original_sessions/ with a Claude-project-named zip
-                # before repackaging the final TASK zip.
-                sessions_zip_info = package_sessions_dir_as_zip(extract_root)
                 # Drop the validator's .tmp/ from the extract -- the report is
                 # already persisted under the task's validation/ folder.
                 if remove_validator_tmp(extract_root):
@@ -2637,10 +2655,7 @@ def process_task(
                 print("")
                 print(f"[{task_id}] To fix manually, edit the extracted package at:")
                 print(f"    {extract_root}")
-                print(
-                    f"[{task_id}] (edits to {extract_root / 'original_sessions'} "
-                    "are honored on retry)"
-                )
+                print(f"[{task_id}] (manual edits to this extracted package are honored on retry)")
                 print(f"[{task_id}] Validation report:")
                 persisted_report = validation_persist_dir / "validation_report.md"
                 if persisted_report.is_file():
@@ -2664,7 +2679,6 @@ def process_task(
                         "[%s] user chose ZIP-ANYWAY; repackaging extract despite validation failure",
                         task_id,
                     )
-                    sessions_zip_info = package_sessions_dir_as_zip(extract_root)
                     if remove_validator_tmp(extract_root):
                         log.debug(
                             "[%s] removed validator .tmp/ from extract before repackage",
@@ -2818,6 +2832,20 @@ def build_parser() -> argparse.ArgumentParser:
             "validation failures abort the task and delete the zip."
         ),
     )
+    translation_group = parser.add_mutually_exclusive_group()
+    translation_group.add_argument(
+        "--translate",
+        dest="translation_enabled",
+        action="store_true",
+        help="Enable Chinese translation passes (default).",
+    )
+    translation_group.add_argument(
+        "--no-translate",
+        dest="translation_enabled",
+        action="store_false",
+        help="Disable Chinese translation passes.",
+    )
+    parser.set_defaults(translation_enabled=True)
     parser.add_argument(
         "--min-token-cost-usd",
         type=float,
@@ -2956,6 +2984,7 @@ def main() -> int:
                     keep_work_dir=args.keep_work_dir,
                     min_token_cost_usd=args.min_token_cost_usd,
                     interactive_on_validation_failure=args.interactive_validation,
+                    translation_enabled=args.translation_enabled,
                 )
             except PackageValidationError as exc:
                 failed += 1
