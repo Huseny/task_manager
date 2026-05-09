@@ -67,6 +67,9 @@ NULLABLE_METADATA_FIELDS = {
     "frontend_framework",
 }
 
+# Literal "none" is valid for fields where the absence of a component is expected.
+METADATA_NONE_ALLOWED_FIELDS = set(NULLABLE_METADATA_FIELDS) | {"database"}
+
 METADATA_INVALID_PLACEHOLDER_TOKENS = {
     "none",
     "null",
@@ -98,9 +101,11 @@ def _normalize_metadata_value_token(value: str) -> str:
     return re.sub(r"[\s\-_./\\|]+", "", value.strip().lower())
 
 
-def is_invalid_metadata_placeholder(value: str) -> bool:
+def is_invalid_metadata_placeholder(value: str, allow_none: bool = False) -> bool:
     token = _normalize_metadata_value_token(value)
     if not token:
+        return False
+    if allow_none and token == "none":
         return False
     return token in METADATA_INVALID_PLACEHOLDER_TOKENS
 
@@ -2113,7 +2118,8 @@ class MetadataValidator(SectionValidator):
             if key not in NULLABLE_METADATA_FIELDS and not value.strip():
                 section.add_fail(f"metadata.{key} cannot be empty", rel)
                 continue
-            if is_invalid_metadata_placeholder(value):
+            allow_none = key in METADATA_NONE_ALLOWED_FIELDS
+            if is_invalid_metadata_placeholder(value, allow_none=allow_none):
                 section.add_fail(
                     f"metadata.{key} is a placeholder value ({value!r}); fill in a real value",
                     rel,
