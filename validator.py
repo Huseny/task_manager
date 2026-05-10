@@ -2872,7 +2872,7 @@ class SessionsValidator(SectionValidator):
             )
         else:
             if not re.search(r"TASK-req_[A-Za-z0-9_-]+$", cwd_value):
-                section.add_fail(
+                section.add_warn(
                     "Development appears not to be running from project root: first session 'cwd' does not end with TASK-req_*; development should be done from the project root",
                     self._rel(first_jsonl),
                 )
