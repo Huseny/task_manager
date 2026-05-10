@@ -408,7 +408,7 @@ SESSION_UUID_RE = re.compile(
 ALLOWED_NON_UUID_FIRST_LAYER_FILES = {"memory.jsonl"}
 SESSION_ARCHIVE_SUFFIXES = {".zip", ".rar", ".7z", ".tar", ".gz"}
 LEADING_SESSION_ZIP_LINUX_PREFIX = "-"
-LEADING_SESSION_ZIP_WINDOWS_PREFIX = "c--"
+LEADING_SESSION_ZIP_WINDOWS_PREFIX_RE = re.compile(r"^[A-Za-z]--")
 LEADING_BUNDLE_EXEMPT_DIR_NAMES = {"tool-results", "memory"}
 TOKEN_USAGE_KEYS = (
     "input_tokens",
@@ -1488,7 +1488,7 @@ def _build_claude_session_stem_from_cwd(cwd: str) -> str | None:
     """Build Claude-style session bundle stem from a cwd path.
 
     Linux absolute path: /a/b -> -a-b
-    Windows absolute path: C:\\a\\b -> C--a-b
+    Windows absolute path: D:\\a\\b -> D--a-b
     """
     raw = cwd.strip()
     if not raw:
@@ -3153,7 +3153,7 @@ class SessionsValidator(SectionValidator):
         return stem.startswith(LEADING_SESSION_ZIP_LINUX_PREFIX)
 
     def _is_windows_style_session_zip_stem(self, stem: str) -> bool:
-        return stem.lower().startswith(LEADING_SESSION_ZIP_WINDOWS_PREFIX)
+        return LEADING_SESSION_ZIP_WINDOWS_PREFIX_RE.match(stem) is not None
 
     def _is_leading_session_zip_archive(self, path: Path) -> bool:
         if not path.is_file() or path.suffix.lower() != ".zip":
