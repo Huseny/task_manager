@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import importlib
 import json
 import os
 import re
@@ -124,6 +125,75 @@ def _is_dockerfile_name(name: str) -> bool:
         return True
     if lower.endswith(".dockerfile") and lower != ".dockerfile":
         return True
+    return False
+
+
+def _load_yaml_module() -> Any:
+    try:
+        return importlib.import_module("yaml")
+    except ImportError:
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "PyYAML"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            raise ValidatorError("PyYAML is required but pip is not available") from exc
+        except subprocess.CalledProcessError as exc:
+            raise ValidatorError(
+                "PyYAML is required and automatic installation failed"
+            ) from exc
+        return importlib.import_module("yaml")
+
+
+def _compose_port_text_mentions_3000(value: Any) -> bool:
+    def _range_includes_3000(text: str) -> bool:
+        parts = text.split("-", 1)
+        if len(parts) == 1:
+            try:
+                return int(parts[0]) == 3000
+            except ValueError:
+                return False
+        try:
+            start = int(parts[0])
+            end = int(parts[1])
+        except ValueError:
+            return False
+        return start <= 3000 <= end
+
+    if isinstance(value, int):
+        return value == 3000
+    if isinstance(value, dict):
+        for key in ("published", "target", "host_port", "container_port"):
+            nested = value.get(key)
+            if nested is not None and _compose_port_text_mentions_3000(nested):
+                return True
+        return False
+    if not isinstance(value, str):
+        return False
+
+    text = value.strip()
+    if not text:
+        return False
+    if "/" in text:
+        text = text.split("/", 1)[0].strip()
+    if not text:
+        return False
+
+    if text.startswith("[") and "]:" in text:
+        text = text.split("]:", 1)[1]
+
+    parts = [part.strip() for part in text.split(":") if part.strip()]
+    if not parts:
+        return False
+    if len(parts) == 1:
+        return _range_includes_3000(parts[0])
+
+    for part in parts[-2:]:
+        if _range_includes_3000(part):
+            return True
     return False
 
 
@@ -1892,6 +1962,9 @@ class StructureValidator(SectionValidator):
         (string or mapping form), resolves each ``context``/``dockerfile`` pair
         relative to the compose file, and asserts the resulting path exists and
         looks like a Dockerfile (Dockerfile, Dockerfile.*, *.Dockerfile).
+
+        Also verifies that at least one service publishes or targets port 3000,
+        which is the expected app entry point for the delivery bundles.
         """
         compose_names = (
             "docker-compose.yml",
@@ -1905,17 +1978,11 @@ class StructureValidator(SectionValidator):
         if not compose_paths:
             return
 
-        try:
-            import yaml  # type: ignore[import-not-found]
-        except ImportError:
-            section.add_warn(
-                "docker-compose dockerfile reference check skipped: PyYAML not installed",
-                self._rel(compose_paths[0]),
-            )
-            return
+        yaml = _load_yaml_module()
 
         failures = 0
         checked_refs = 0
+        port_3000_found = False
         for compose_path in compose_paths:
             text = read_text(compose_path)
             if text is None:
@@ -1943,6 +2010,16 @@ class StructureValidator(SectionValidator):
             for svc_name, svc in services.items():
                 if not isinstance(svc, dict):
                     continue
+
+                ports = svc.get("ports")
+                if not port_3000_found:
+                    if isinstance(ports, list):
+                        port_3000_found = any(
+                            _compose_port_text_mentions_3000(port) for port in ports
+                        )
+                    else:
+                        port_3000_found = _compose_port_text_mentions_3000(ports)
+
                 build = svc.get("build")
                 if build is None:
                     continue
@@ -1986,6 +2063,17 @@ class StructureValidator(SectionValidator):
         if checked_refs and failures == 0:
             section.add_pass(
                 f"docker-compose Dockerfile references resolve ({checked_refs} reference(s))",
+                self._rel(compose_paths[0]),
+            )
+
+        if port_3000_found:
+            section.add_pass(
+                "docker-compose exposes app entry point on port 3000",
+                self._rel(compose_paths[0]),
+            )
+        else:
+            section.add_fail(
+                "docker-compose must expose app entry point on port 3000",
                 self._rel(compose_paths[0]),
             )
 

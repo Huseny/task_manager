@@ -31,22 +31,366 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import io
+import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import tokenize
 import zipfile
 from pathlib import Path
 from typing import Any
 
 from export_tasks import (
-    translate_chinese_text_in_repo_files,
-    translate_chinese_text_in_sessions,
+    CHINESE_CHAR_RE,
+    CHINESE_SEGMENT_RE,
+    REPO_TEXT_CLEANUP_SKIP_DIR_NAMES,
+    SAFE_FULL_TEXT_REPO_EXTENSIONS,
+    contains_chinese_text,
     zip_directory_contents,
 )
 
 log = logging.getLogger("fix_chinese_task_zips")
+
+
+def _prompt_for_translation(chinese_text: str) -> str:
+    """Prompt the user to provide English replacement for Chinese text."""
+    print("\n" + "=" * 60)
+    print(f"Found Chinese text: {chinese_text}")
+    print("=" * 60)
+    while True:
+        english_text = input(
+            "Enter English replacement (or 'skip' to keep Chinese): "
+        ).strip()
+        if english_text.lower() == "skip":
+            return chinese_text
+        if english_text:
+            return english_text
+        print("Please enter a non-empty translation or 'skip'.")
+
+
+def _replace_chinese_segments_in_text_interactive(
+    text: str, cache: dict[str, str]
+) -> tuple[str, int, int]:
+    """Replace Chinese segments with user-provided English translations."""
+    if not text or not contains_chinese_text(text):
+        return text, 0, 0
+
+    replacements = 0
+    translated_segments = 0
+
+    def _replace(match: re.Match[str]) -> str:
+        nonlocal replacements, translated_segments
+        segment = match.group(0)
+        stripped = segment.strip()
+        if not stripped or not contains_chinese_text(stripped):
+            return segment
+
+        # Check cache first
+        if stripped in cache:
+            translated = cache[stripped]
+        else:
+            # Prompt user
+            translated = _prompt_for_translation(stripped)
+            cache[stripped] = translated
+
+        if not translated or translated == stripped:
+            return segment
+
+        translated_segments += 1
+        replacements += 1
+        prefix_len = len(segment) - len(segment.lstrip())
+        suffix_len = len(segment) - len(segment.rstrip())
+        prefix = segment[:prefix_len]
+        suffix = segment[len(segment) - suffix_len :] if suffix_len else ""
+        return f"{prefix}{translated}{suffix}"
+
+    updated = CHINESE_SEGMENT_RE.sub(_replace, text)
+    return updated, replacements, translated_segments
+
+
+def _translate_chinese_strings_in_payload_interactive(
+    value: Any, cache: dict[str, str]
+) -> tuple[Any, int, int]:
+    """Recursively translate Chinese strings in JSON payloads with user prompts."""
+    if isinstance(value, dict):
+        changed = 0
+        translated_segments = 0
+        updated: dict[Any, Any] = {}
+        for key, item in value.items():
+            new_item, item_changed, item_segments = (
+                _translate_chinese_strings_in_payload_interactive(item, cache)
+            )
+            updated[key] = new_item
+            changed += item_changed
+            translated_segments += item_segments
+        return updated, changed, translated_segments
+
+    if isinstance(value, list):
+        changed = 0
+        translated_segments = 0
+        updated_items: list[Any] = []
+        for item in value:
+            new_item, item_changed, item_segments = (
+                _translate_chinese_strings_in_payload_interactive(item, cache)
+            )
+            updated_items.append(new_item)
+            changed += item_changed
+            translated_segments += item_segments
+        return updated_items, changed, translated_segments
+
+    if isinstance(value, str):
+        updated, replacements, translated_segments = (
+            _replace_chinese_segments_in_text_interactive(value, cache)
+        )
+        return updated, replacements, translated_segments
+
+    return value, 0, 0
+
+
+def _translate_chinese_text_in_sessions_interactive(
+    root: Path, cache: dict[str, str]
+) -> dict[str, Any]:
+    """Translate Chinese text in session JSON/JSONL files with user prompts."""
+    files_changed = 0
+    changed_fields = 0
+    translated_segments = 0
+    parse_errors = 0
+    changed_files: list[str] = []
+
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".json", ".jsonl"}:
+            continue
+
+        if path.suffix.lower() == ".jsonl":
+            try:
+                raw_text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                log.warning("chinese cleanup: cannot read %s: %s", path, exc)
+                continue
+
+            lines = raw_text.splitlines()
+            out_lines: list[str] = []
+            file_changed = False
+
+            for line in lines:
+                if not line.strip():
+                    out_lines.append(line)
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    parse_errors += 1
+                    out_lines.append(line)
+                    continue
+
+                updated_payload, line_changed, line_segments = (
+                    _translate_chinese_strings_in_payload_interactive(payload, cache)
+                )
+                changed_fields += line_changed
+                translated_segments += line_segments
+                if line_changed > 0:
+                    file_changed = True
+                    out_lines.append(
+                        json.dumps(
+                            updated_payload, ensure_ascii=False, separators=(",", ":")
+                        )
+                    )
+                else:
+                    out_lines.append(line)
+
+            if file_changed:
+                path.write_text(
+                    "\n".join(out_lines) + ("\n" if raw_text.endswith("\n") else ""),
+                    encoding="utf-8",
+                )
+                files_changed += 1
+                changed_files.append(str(path))
+            continue
+
+        try:
+            raw_text = path.read_text(encoding="utf-8", errors="replace")
+            payload = json.loads(raw_text)
+        except Exception:
+            parse_errors += 1
+            continue
+
+        updated_payload, file_changed, file_segments = (
+            _translate_chinese_strings_in_payload_interactive(payload, cache)
+        )
+        changed_fields += file_changed
+        translated_segments += file_segments
+        if file_changed > 0:
+            path.write_text(
+                json.dumps(updated_payload, ensure_ascii=False, separators=(",", ":"))
+                + ("\n" if raw_text.endswith("\n") else ""),
+                encoding="utf-8",
+            )
+            files_changed += 1
+            changed_files.append(str(path))
+
+    return {
+        "files_changed": files_changed,
+        "changed_fields": changed_fields,
+        "translated_segments": translated_segments,
+        "parse_errors": parse_errors,
+        "cache_entries": len(cache),
+        "changed_files": changed_files,
+        "error": "",
+    }
+
+
+def _classify_repo_text_cleanup(path: Path) -> str:
+    """Classify file type for cleanup."""
+    suffix = path.suffix.lower()
+    if suffix == ".py":
+        return "python"
+    if suffix in SAFE_FULL_TEXT_REPO_EXTENSIONS:
+        return "full"
+    return "full"
+
+
+def _is_probably_binary_file(path: Path) -> bool:
+    """Check if file is probably binary."""
+    try:
+        sample = path.read_bytes()[:4096]
+    except OSError:
+        return True
+    return b"\x00" in sample
+
+
+def _should_skip_repo_text_cleanup(path: Path, repo_dir: Path) -> bool:
+    """Check if file should be skipped for cleanup."""
+    try:
+        rel_parts = path.relative_to(repo_dir).parts
+    except ValueError:
+        return True
+    if not rel_parts:
+        return True
+    if "original_sessions" in rel_parts:
+        return True
+    return any(part in REPO_TEXT_CLEANUP_SKIP_DIR_NAMES for part in rel_parts[:-1])
+
+
+def _translate_python_comments_and_strings_interactive(
+    raw_text: str, cache: dict[str, str]
+) -> tuple[str, int, int]:
+    """Translate Chinese in Python comments and strings with user prompts."""
+    changed_tokens = 0
+    translated_segments = 0
+    output_tokens: list[tokenize.TokenInfo] = []
+
+    for token_info in tokenize.generate_tokens(io.StringIO(raw_text).readline):
+        token_string = token_info.string
+        if token_info.type == tokenize.COMMENT and contains_chinese_text(token_string):
+            updated, replacements, segments = (
+                _replace_chinese_segments_in_text_interactive(token_string, cache)
+            )
+            if replacements > 0:
+                token_info = token_info._replace(string=updated)
+                changed_tokens += replacements
+                translated_segments += segments
+        elif token_info.type == tokenize.STRING and contains_chinese_text(token_string):
+            lower = token_string.lower()
+            if "f" in lower[:2] or "b" in lower[:2]:
+                output_tokens.append(token_info)
+                continue
+            try:
+                import ast
+
+                literal_value = ast.literal_eval(token_string)
+            except Exception:
+                output_tokens.append(token_info)
+                continue
+            if not isinstance(literal_value, str) or not contains_chinese_text(
+                literal_value
+            ):
+                output_tokens.append(token_info)
+                continue
+            updated_value, replacements, segments = (
+                _replace_chinese_segments_in_text_interactive(literal_value, cache)
+            )
+            if replacements > 0:
+                token_info = token_info._replace(string=repr(updated_value))
+                changed_tokens += replacements
+                translated_segments += segments
+        output_tokens.append(token_info)
+
+    return tokenize.untokenize(output_tokens), changed_tokens, translated_segments
+
+
+def _translate_chinese_text_in_repo_files_interactive(
+    repo_dir: Path, cache: dict[str, str]
+) -> dict[str, Any]:
+    """Translate Chinese text in repo files with user prompts."""
+    files_changed = 0
+    translated_segments = 0
+    skipped_binary = 0
+    read_errors = 0
+    changed_files: list[str] = []
+
+    for path in sorted(repo_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        if _should_skip_repo_text_cleanup(path, repo_dir):
+            continue
+        mode = _classify_repo_text_cleanup(path)
+        if _is_probably_binary_file(path):
+            skipped_binary += 1
+            continue
+
+        try:
+            raw_text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            skipped_binary += 1
+            continue
+        except OSError as exc:
+            read_errors += 1
+            log.warning("repo chinese cleanup: cannot read %s: %s", path, exc)
+            continue
+
+        if not raw_text or not contains_chinese_text(raw_text):
+            continue
+
+        if mode == "python":
+            try:
+                updated_text, replacements, file_segments = (
+                    _translate_python_comments_and_strings_interactive(raw_text, cache)
+                )
+            except tokenize.TokenError as exc:
+                read_errors += 1
+                log.warning("repo chinese cleanup: cannot tokenize %s: %s", path, exc)
+                continue
+        else:
+            updated_text, replacements, file_segments = (
+                _replace_chinese_segments_in_text_interactive(raw_text, cache)
+            )
+        if replacements == 0:
+            continue
+
+        try:
+            path.write_text(updated_text, encoding="utf-8")
+        except OSError as exc:
+            read_errors += 1
+            log.warning("repo chinese cleanup: cannot write %s: %s", path, exc)
+            continue
+
+        files_changed += 1
+        translated_segments += file_segments
+        changed_files.append(str(path))
+
+    return {
+        "files_changed": files_changed,
+        "translated_segments": translated_segments,
+        "skipped_binary": skipped_binary,
+        "read_errors": read_errors,
+        "cache_entries": len(cache),
+        "changed_files": changed_files,
+        "error": "",
+    }
 
 
 def _find_task_zips(target: Path, pattern: str) -> list[Path]:
@@ -108,6 +452,57 @@ def _persist_validation_artifacts(
     }
 
 
+def _generate_fix_report_json(task_zip: Path, result: dict[str, Any]) -> dict[str, Any]:
+    """Generate a comprehensive JSON report and save it next to the TASK zip."""
+    out_dir = task_zip.parent / f"{task_zip.stem}__chinese_fix_validation"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine if validation failed after translation attempt
+    validation_failed_after_translation = result["status"] == "fixed_but_still_invalid"
+
+    report = {
+        "task_zip": str(task_zip),
+        "task_zip_filename": task_zip.name,
+        "status": result["status"],
+        "changed": result["changed"],
+        "validation_exit_code": result["validation_exit_code"],
+        "validation_failed_after_translation": validation_failed_after_translation,
+        "package_translations": {
+            "files_changed": result["package_files_changed"],
+            "translated_segments": result["package_translated_segments"],
+            "skipped_binary": result["package_skipped_binary"],
+            "read_errors": result["package_read_errors"],
+        },
+        "sessions_translations": {
+            "loose_files_changed": result["sessions_loose_files_changed"],
+            "loose_changed_fields": result["sessions_loose_changed_fields"],
+            "loose_translated_segments": result["sessions_loose_translated_segments"],
+            "loose_parse_errors": result["sessions_loose_parse_errors"],
+            "inner_zips_changed": result["sessions_inner_zips_changed"],
+            "inner_zip_translated_segments": result[
+                "sessions_inner_zip_translated_segments"
+            ],
+            "inner_zip_parse_errors": result["sessions_inner_zip_parse_errors"],
+            "inner_zip_errors": result["sessions_inner_zip_errors"],
+        },
+        "validation_artifacts": {
+            "output_dir": result["validation_output_dir"],
+            "report_path": result["validation_report_path"],
+            "stdout_path": result["validation_stdout_path"],
+            "stderr_path": result["validation_stderr_path"],
+        },
+        "work_dir": result["work_dir"],
+    }
+
+    report_path = out_dir / "fix_report.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    return {
+        "report_path": str(report_path),
+        "report_data": report,
+    }
+
+
 def _run_validator(extract_root: Path, task_zip: Path) -> dict[str, Any]:
     validator_path = Path(__file__).resolve().parent / "validate_package_direct_original_sessions.py"
     result = subprocess.run(
@@ -129,12 +524,17 @@ def _run_validator(extract_root: Path, task_zip: Path) -> dict[str, Any]:
     }
 
 
-def _fix_inner_sessions_zip(inner_zip: Path) -> dict[str, Any]:
+def _fix_inner_sessions_zip_interactive(
+    inner_zip: Path, cache: dict[str, str]
+) -> dict[str, Any]:
+    """Fix Chinese text in inner sessions zip with user prompts."""
     with tempfile.TemporaryDirectory(prefix=inner_zip.stem + ".") as tmp_dir_str:
         tmp_dir = Path(tmp_dir_str)
         extract_dir = tmp_dir / "extract"
         _extract_zip(inner_zip, extract_dir)
-        session_stats = translate_chinese_text_in_sessions(extract_dir)
+        session_stats = _translate_chinese_text_in_sessions_interactive(
+            extract_dir, cache
+        )
         changed = (
             session_stats["files_changed"] > 0
             or session_stats["changed_fields"] > 0
@@ -152,7 +552,10 @@ def _fix_inner_sessions_zip(inner_zip: Path) -> dict[str, Any]:
         }
 
 
-def _fix_original_sessions_dir(original_sessions_dir: Path) -> dict[str, Any]:
+def _fix_original_sessions_dir_interactive(
+    original_sessions_dir: Path, cache: dict[str, str]
+) -> dict[str, Any]:
+    """Fix Chinese text in original_sessions directory with user prompts."""
     if not original_sessions_dir.is_dir():
         return {
             "loose_files_changed": 0,
@@ -165,7 +568,9 @@ def _fix_original_sessions_dir(original_sessions_dir: Path) -> dict[str, Any]:
             "inner_zip_errors": 0,
         }
 
-    loose_stats = translate_chinese_text_in_sessions(original_sessions_dir)
+    loose_stats = _translate_chinese_text_in_sessions_interactive(
+        original_sessions_dir, cache
+    )
     inner_zips_changed = 0
     inner_zip_translated_segments = 0
     inner_zip_parse_errors = 0
@@ -173,7 +578,7 @@ def _fix_original_sessions_dir(original_sessions_dir: Path) -> dict[str, Any]:
 
     for inner_zip in sorted(original_sessions_dir.rglob("*.zip")):
         try:
-            stats = _fix_inner_sessions_zip(inner_zip)
+            stats = _fix_inner_sessions_zip_interactive(inner_zip, cache)
         except Exception as exc:
             inner_zip_errors += 1
             log.warning("inner sessions zip cleanup failed for %s: %s", inner_zip, exc)
@@ -200,11 +605,17 @@ def fix_task_zip(task_zip: Path, dry_run: bool, keep_work_dir: bool) -> dict[str
         tempfile.mkdtemp(prefix=task_zip.stem + ".", dir=str(task_zip.parent))
     )
     extract_root = work_dir / "extract"
+    # Use a single shared cache for all translations in this task zip
+    translation_cache: dict[str, str] = {}
     try:
         _extract_zip(task_zip, extract_root)
 
-        package_stats = translate_chinese_text_in_repo_files(extract_root)
-        sessions_stats = _fix_original_sessions_dir(extract_root / "original_sessions")
+        package_stats = _translate_chinese_text_in_repo_files_interactive(
+            extract_root, translation_cache
+        )
+        sessions_stats = _fix_original_sessions_dir_interactive(
+            extract_root / "original_sessions", translation_cache
+        )
 
         validator = _run_validator(extract_root, task_zip)
 
@@ -231,7 +642,7 @@ def fix_task_zip(task_zip: Path, dry_run: bool, keep_work_dir: bool) -> dict[str
         if not status:
             status = "no_changes_invalid"
 
-        return {
+        result = {
             "status": status,
             "changed": changed,
             "package_files_changed": package_stats["files_changed"],
@@ -240,10 +651,14 @@ def fix_task_zip(task_zip: Path, dry_run: bool, keep_work_dir: bool) -> dict[str
             "package_read_errors": package_stats["read_errors"],
             "sessions_loose_files_changed": sessions_stats["loose_files_changed"],
             "sessions_loose_changed_fields": sessions_stats["loose_changed_fields"],
-            "sessions_loose_translated_segments": sessions_stats["loose_translated_segments"],
+            "sessions_loose_translated_segments": sessions_stats[
+                "loose_translated_segments"
+            ],
             "sessions_loose_parse_errors": sessions_stats["loose_parse_errors"],
             "sessions_inner_zips_changed": sessions_stats["inner_zips_changed"],
-            "sessions_inner_zip_translated_segments": sessions_stats["inner_zip_translated_segments"],
+            "sessions_inner_zip_translated_segments": sessions_stats[
+                "inner_zip_translated_segments"
+            ],
             "sessions_inner_zip_parse_errors": sessions_stats["inner_zip_parse_errors"],
             "sessions_inner_zip_errors": sessions_stats["inner_zip_errors"],
             "validation_exit_code": validator["exit_code"],
@@ -253,6 +668,12 @@ def fix_task_zip(task_zip: Path, dry_run: bool, keep_work_dir: bool) -> dict[str
             "validation_stderr_path": validator["stderr_path"],
             "work_dir": str(work_dir),
         }
+
+        # Generate JSON report
+        report_info = _generate_fix_report_json(task_zip, result)
+        result["report_json_path"] = report_info["report_path"]
+
+        return result
     finally:
         if not keep_work_dir and work_dir.exists():
             shutil.rmtree(work_dir, ignore_errors=True)
@@ -320,15 +741,21 @@ def main(argv: list[str] | None = None) -> int:
 
         status = str(result["status"])
         counts[status] = counts.get(status, 0) + 1
+
+        validation_failed_msg = ""
+        if result.get("validation_failed_after_translation"):
+            validation_failed_msg = " | VALIDATION FAILED AFTER TRANSLATION"
+
         log.info(
-            "%s: %s | changed=%s | package_files=%d | inner_zips=%d | validator_exit=%d | artifacts=%s",
+            "%s: %s | changed=%s | package_files=%d | inner_zips=%d | validator_exit=%d | report=%s%s",
             task_zip,
             status,
             result["changed"],
             result["package_files_changed"],
             result["sessions_inner_zips_changed"],
             result["validation_exit_code"],
-            result["validation_output_dir"],
+            result.get("report_json_path", "N/A"),
+            validation_failed_msg,
         )
         if args.keep_work_dir:
             log.info("%s: kept work dir at %s", task_zip, result["work_dir"])
