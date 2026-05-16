@@ -121,10 +121,12 @@ def _is_invalid_metadata_placeholder(value: str) -> bool:
 
 
 def _metadata_allow_empty_keys(project_type_value: str) -> set[str]:
-    if project_type_value == "web":
-        return {"backend_language", "backend_framework"}
+    if project_type_value in {"web", "ios"}:
+        return {"backend_language", "backend_framework", "database"}
     if project_type_value == "server":
         return {"frontend_language", "frontend_framework"}
+    if project_type_value in {"android", "desktop"}:
+        return {"database"}
     return set()
 
 
@@ -167,6 +169,7 @@ TOKEN_PRICE_CACHE_WRITE_PER_M_USD = TOKEN_PRICE_INPUT_PER_M_USD * 1.25
 TOKEN_COST_THRESHOLD_SERVER_WEB_USD = 15.0
 TOKEN_COST_THRESHOLD_FULLSTACK_USD = 30.0
 TOKEN_COST_THRESHOLD_DEFAULT_USD = 20.0
+TOKEN_COST_MAX_USD = 350.0
 PROJECT_TYPES_REQUIRE_DOCKER_AND_TEST = {"web", "server", "fullstack"}
 PROJECT_TYPES_REQUIRE_API_SPEC = {"server", "fullstack"}
 
@@ -304,7 +307,7 @@ ORIGINAL_SESSIONS_DIR_NAME = "original_sessions"
 SESSION_ARCHIVE_SUFFIXES = {".zip", ".rar", ".7z", ".tar", ".gz"}
 LEADING_BUNDLE_EXEMPT_DIR_NAMES = {"tool-results", "memory"}
 LEADING_SESSION_ZIP_LINUX_PREFIX = "-"
-LEADING_SESSION_ZIP_WINDOWS_PREFIX = "c--"
+LEADING_SESSION_ZIP_WINDOWS_DRIVE_RE = re.compile(r"^[a-z]--", re.IGNORECASE)
 METADATA_REQUIRED_KEYS = (
     "prompt",
     "project_type",
@@ -337,7 +340,7 @@ METADATA_INVALID_PLACEHOLDER_TOKENS = {
     "待定",
     "空",
 }
-ROOT_STANDARD_DIR_NAMES = {"docs", ORIGINAL_SESSIONS_DIR_NAME, REPO_DIR_NAME, ".tmp", ".backup", ".git"}
+ROOT_STANDARD_DIR_NAMES = {"docs", ORIGINAL_SESSIONS_DIR_NAME, REPO_DIR_NAME, "skills", ".tmp", ".backup", ".git"}
 
 RUNTIME_NOISE_DIR_NAMES = {
     "__pycache__",
@@ -368,6 +371,19 @@ RUNTIME_NOISE_DIR_NAMES = {
     ".bundle",
     "vendor",
     ".cache",
+}
+
+VENDOR_REFERENCE_CONTEXT_DIR_NAMES = {"static", "public", "assets"}
+VENDOR_DEPENDENCY_MARKER_FILENAMES = {
+    "composer.json",
+    "composer.lock",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lockb",
+    "Gemfile",
+    "Gemfile.lock",
 }
 
 RUNTIME_NOISE_FILE_NAMES = {
@@ -550,7 +566,7 @@ DIR_VIOLATION_REASONS = {
     "cmakefiles": "为 C/C++ 构建目录",
     ".dart_tool": "为 Dart/Flutter 本地缓存目录",
     ".bundle": "为 Ruby 本地依赖目录",
-    "vendor": "为依赖目录",
+    "vendor": "疑似依赖目录，需结合路径与引用确认",
 }
 
 COMPILE_EXEMPT_DIR_NAMES = {
@@ -584,6 +600,12 @@ COMPILE_EXEMPT_FILE_NAMES = {
     "compile_commands.json",
 }
 
+DATABASE_FILE_SUFFIXES = {".sqlite", ".sqlite3", ".db"}
+
+SIZE_WARN_SINGLE_FILE_BYTES = 50 * 1024 * 1024
+SIZE_WARN_TOTAL_BYTES = 200 * 1024 * 1024
+SIZE_SKIP_DIR_NAMES = {".git", ".backup", ".tmp", ORIGINAL_SESSIONS_DIR_NAME}
+
 FILE_VIOLATION_RULES = [
     (lambda p: p.suffix.lower() == ".pyc", "为 Python 缓存文件"),
     (lambda p: p.name.lower() == ".coverage", "为覆盖率文件"),
@@ -603,7 +625,6 @@ FILE_VIOLATION_RULES = [
         lambda p: p.as_posix().lower().endswith("android/local.properties"),
         "为 Android 本地配置文件",
     ),
-    (lambda p: p.suffix.lower() in {".db", ".sqlite", ".sqlite3"}, "为本地数据库文件"),
     (lambda p: p.suffix.lower() == ".tsbuildinfo", "为 TypeScript 构建缓存文件"),
     (lambda p: p.name.lower() == "session.json", "为不应交付文件（session.json）"),
     (
@@ -754,6 +775,7 @@ class PackageValidator:
         self._detect_languages()
         self._check_gitignore_coverage()
         self._check_local_dirty_files()
+        self._check_package_size()
 
         self._write_report()
         self._cleanup_extracted_session_dirs_after_report()
@@ -1591,8 +1613,19 @@ class PackageValidator:
         return stem.startswith(LEADING_SESSION_ZIP_LINUX_PREFIX)
 
     def _is_windows_style_session_zip_stem(self, stem: str) -> bool:
-        # Windows C 盘路径归一化后通常会以 "C--" 开头（大小写不敏感）。
-        return stem.lower().startswith(LEADING_SESSION_ZIP_WINDOWS_PREFIX)
+        # Windows 绝对路径归一化后通常会以 "<盘符>--" 开头（大小写不敏感），
+        # 例如 C-- / D-- / E--。
+        return LEADING_SESSION_ZIP_WINDOWS_DRIVE_RE.match(stem) is not None
+
+    def _is_dockerfile_candidate_filename(self, filename: str) -> bool:
+        lower = filename.lower()
+        if lower == "dockerfile":
+            return True
+        if lower.startswith("dockerfile."):
+            return True
+        if lower.endswith(".dockerfile"):
+            return True
+        return False
 
     def _is_leading_session_zip_archive(self, path: Path) -> bool:
         if not path.is_file() or path.suffix.lower() != ".zip":
@@ -1957,7 +1990,7 @@ class PackageValidator:
             normalized_value = value.strip()
             if not normalized_value and key not in allow_empty_keys:
                 return None, metadata_path, f"metadata.json 字段 {key} 为空，无法进行锚点比对"
-            if normalized_value and _is_invalid_metadata_placeholder(normalized_value):
+            if normalized_value and _is_invalid_metadata_placeholder(normalized_value) and key not in allow_empty_keys:
                 return (
                     None,
                     metadata_path,
@@ -2248,6 +2281,17 @@ class PackageValidator:
         if message_type and message_type != "message":
             return False
         role = str(message.get("role", "")).strip().lower()
+        if role == "assistant":
+            content = message.get("content")
+            if isinstance(content, list):
+                non_empty_items = [item for item in content if isinstance(item, dict)]
+                if non_empty_items and all(
+                    str(item.get("type", "")).strip().lower() == "redacted_thinking" for item in non_empty_items
+                ):
+                    return False
+            elif isinstance(content, dict):
+                if str(content.get("type", "")).strip().lower() == "redacted_thinking":
+                    return False
         if role == "user":
             content_text = self._extract_candidate_content_from_user_payload(payload, message)
             if self._is_session_prompt_compare_exempt_payload(payload, content_text):
@@ -3132,12 +3176,21 @@ class PackageValidator:
                 self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
             )
 
-        if overall_cost_usd < threshold_usd:
-            section.add_fail(
+        if overall_cost_usd > TOKEN_COST_MAX_USD:
+            section.add_warn(
                 (
-                    "original_sessions 题目开发成本校验失败："
+                    "original_sessions 题目开发成本提醒："
+                    f"cost_usd=${overall_cost_usd:,.4f} > max_threshold=${TOKEN_COST_MAX_USD:,.2f}"
+                    f"（project_type={threshold_project_type}），请注意 token 使用量"
+                ),
+                self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
+            )
+        elif overall_cost_usd < threshold_usd:
+            section.add_warn(
+                (
+                    "original_sessions 题目开发成本提醒："
                     f"cost_usd=${overall_cost_usd:,.4f} < threshold=${threshold_usd:,.2f}"
-                    f"（project_type={threshold_project_type}）"
+                    f"（project_type={threshold_project_type}），请审查轨迹文件是否齐全"
                 ),
                 self._rel(self.root / ORIGINAL_SESSIONS_DIR_NAME),
             )
@@ -4552,6 +4605,23 @@ class PackageValidator:
         else:
             section.add_pass("根目录存在 metadata.json", self._rel(source_path))
 
+        expected_cwd = str(self.root.resolve())
+        cwd_value = parsed.get("cwd")
+        if not isinstance(cwd_value, str) or not cwd_value.strip():
+            parsed["cwd"] = expected_cwd
+            self.metadata = parsed
+            try:
+                source_path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            except OSError as exc:
+                section.add_fail(f'metadata.json 缺少 "cwd" 且自动写入失败: {exc}', self._rel(source_path))
+            else:
+                section.add_warn(
+                    f'metadata.json 缺少 "cwd"，已自动补齐为题目绝对路径: {expected_cwd}',
+                    self._rel(source_path),
+                )
+        else:
+            section.add_pass('metadata.json 字段 "cwd" 存在', self._rel(source_path))
+
         project_type_raw = parsed.get("project_type")
         project_type_normalized = ""
         if isinstance(project_type_raw, str):
@@ -4595,7 +4665,7 @@ class PackageValidator:
                 )
                 continue
 
-            if _is_invalid_metadata_placeholder(normalized):
+            if _is_invalid_metadata_placeholder(normalized) and key not in allow_empty_keys:
                 section.add_fail(
                     f"metadata.json 字段 {key} 为无效占位值: {value}",
                     self._rel(source_path),
@@ -4998,7 +5068,7 @@ class PackageValidator:
                 path = current_path / filename
                 if self._is_runtime_noise_file(path):
                     continue
-                if lower == "dockerfile":
+                if self._is_dockerfile_candidate_filename(filename):
                     dockerfiles.append(path)
                 if lower in compose_set:
                     compose_files.append(path)
@@ -5137,7 +5207,14 @@ class PackageValidator:
 
         if found_count == 0:
             rel = self._rel(repo_gitignore) if repo_gitignore is not None else ".gitignore"
-            section.add_warn("未检测到 .gitignore（可在根目录或 repo 目录中提供）", rel)
+            effective_pt = self._resolve_effective_project_type()
+            if effective_pt in PROJECT_TYPES_REQUIRE_DOCKER_AND_TEST:
+                section.add_fail(
+                    f"未检测到 .gitignore（{effective_pt} 项目必须提供，可在根目录或 repo 目录中）",
+                    rel,
+                )
+            else:
+                section.add_warn("未检测到 .gitignore（可在根目录或 repo 目录中提供）", rel)
 
         self._record_failures()
 
@@ -5416,10 +5493,238 @@ class PackageValidator:
         if not missing_patterns:
             section.add_pass(".gitignore 已覆盖当前语言和通用目录的常见产物规则", scoped_desc)
         else:
+            dirty = self._ensure_dirty_findings_cached()
+            dirty_dir_names = {p.name.lower() for p, _, _ in dirty if p.is_dir()}
+            dirty_file_suffixes = {p.suffix.lower() for p, _, _ in dirty if not p.is_dir()}
+            dirty_file_names = {p.name.lower() for p, _, _ in dirty if not p.is_dir()}
             for pattern in missing_patterns:
-                section.add_warn(f".gitignore 未覆盖 {pattern}", scoped_desc)
+                has_real_dirty = False
+                if pattern.endswith("/"):
+                    if pattern.rstrip("/").lower() in dirty_dir_names:
+                        has_real_dirty = True
+                elif pattern.startswith("*."):
+                    if pattern[1:].lower() in dirty_file_suffixes:
+                        has_real_dirty = True
+                else:
+                    if pattern.lower() in dirty_file_names:
+                        has_real_dirty = True
+                if has_real_dirty:
+                    section.add_fail(f".gitignore 未覆盖 {pattern}（且已检测到相关脏文件）", scoped_desc)
+                else:
+                    section.add_warn(f".gitignore 未覆盖 {pattern}", scoped_desc)
 
         self._record_failures()
+
+    def _is_path_under_dir(self, path: Path, parent_dir: Path) -> bool:
+        try:
+            path.relative_to(parent_dir)
+            return True
+        except ValueError:
+            return False
+
+    def _is_vendor_static_asset_dir(self, vendor_dir: Path) -> bool:
+        if self.root is None:
+            return False
+        try:
+            parts = [part.lower() for part in vendor_dir.relative_to(self.root).parts]
+        except ValueError:
+            return False
+        if not parts or parts[-1] != "vendor":
+            return False
+        return any(part in VENDOR_REFERENCE_CONTEXT_DIR_NAMES for part in parts[:-1])
+
+    def _build_vendor_reference_tokens(self, vendor_dir: Path) -> list[str]:
+        if self.root is None:
+            return []
+        try:
+            rel_parts = [part.lower() for part in vendor_dir.relative_to(self.root).parts]
+        except ValueError:
+            rel_parts = [part.lower() for part in vendor_dir.parts]
+
+        if not rel_parts:
+            return []
+
+        rel_posix = "/".join(rel_parts)
+        tokens: set[str] = {
+            f"{rel_posix}/",
+            f"/{rel_posix}/",
+        }
+
+        context_idx: int | None = None
+        for idx, part in enumerate(rel_parts[:-1]):
+            if part in VENDOR_REFERENCE_CONTEXT_DIR_NAMES:
+                context_idx = idx
+
+        if context_idx is not None:
+            suffix = "/".join(rel_parts[context_idx:])
+            tokens.add(f"{suffix}/")
+            tokens.add(f"/{suffix}/")
+
+        return sorted(tokens, key=len)
+
+    def _find_vendor_reference_evidence(self, vendor_dir: Path, max_hits: int = 5) -> list[str]:
+        tokens = self._build_vendor_reference_tokens(vendor_dir)
+        if not tokens:
+            return []
+
+        hits: list[str] = []
+        for path, content in self._iter_readable_text_files():
+            if self._is_path_under_dir(path, vendor_dir):
+                continue
+            lowered = content.lower()
+            matched_token = next((token for token in tokens if token in lowered), None)
+            if matched_token is None:
+                continue
+
+            line_no = 0
+            for idx, line in enumerate(content.splitlines(), start=1):
+                if matched_token in line.lower():
+                    line_no = idx
+                    break
+
+            rel = self._rel(path)
+            hits.append(f"{rel}:{line_no}" if line_no > 0 else rel)
+            if len(hits) >= max_hits:
+                break
+
+        return hits
+
+    def _collect_vendor_generated_traits(self, vendor_dir: Path, max_items: int = 6) -> list[str]:
+        traits: list[str] = []
+        parent = vendor_dir.parent
+
+        for marker in sorted(VENDOR_DEPENDENCY_MARKER_FILENAMES, key=str.lower):
+            if (parent / marker).is_file():
+                traits.append(f"父目录含 {marker}")
+                if len(traits) >= max_items:
+                    return traits
+
+        if (vendor_dir / "autoload.php").is_file():
+            traits.append("含 autoload.php（Composer 依赖产物特征）")
+        if (vendor_dir / "composer").is_dir():
+            traits.append("含 composer/ 子目录（Composer 依赖产物特征）")
+        if (vendor_dir / "bundle").is_dir():
+            traits.append("含 bundle/ 子目录（Ruby 依赖产物特征）")
+        if (vendor_dir / "cache").is_dir():
+            traits.append("含 cache/ 子目录（依赖缓存特征）")
+
+        if self.root is not None:
+            try:
+                rel_parts = [part.lower() for part in vendor_dir.relative_to(self.root).parts]
+            except ValueError:
+                rel_parts = []
+            if rel_parts == ["vendor"]:
+                traits.append("位于任务根目录 vendor/")
+            elif len(rel_parts) >= 2 and rel_parts[0] == REPO_DIR_NAME and rel_parts[1] == "vendor":
+                traits.append("位于 repo 根目录 vendor/")
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in traits:
+            if item in seen:
+                continue
+            seen.add(item)
+            deduped.append(item)
+            if len(deduped) >= max_items:
+                break
+        return deduped
+
+    def _collect_vendor_risky_content_evidence(self, vendor_dir: Path, max_items: int = 6) -> list[str]:
+        risky_dir_names = {
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            ".cache",
+            ".opencode",
+            ".codex",
+            ".vscode",
+            ".idea",
+            "tmp",
+            "temp",
+            "uploads",
+            "upload",
+        }
+        risky_file_suffixes = {".exe", ".dll", ".so", ".dylib", ".bin", ".msi", ".iso"}
+        large_file_bytes = 50 * 1024 * 1024
+
+        findings: list[str] = []
+        for current_root, dirs, files in os.walk(vendor_dir, topdown=True):
+            dirs.sort(key=str.lower)
+            files.sort(key=str.lower)
+            current_path = Path(current_root)
+
+            for dirname in dirs:
+                if dirname.lower() in risky_dir_names:
+                    findings.append(f"包含可疑目录 {self._rel(current_path / dirname)}/")
+                    if len(findings) >= max_items:
+                        return findings
+
+            for filename in files:
+                file_path = current_path / filename
+                if file_path.suffix.lower() in risky_file_suffixes:
+                    findings.append(f"包含可疑二进制文件 {self._rel(file_path)}")
+                    if len(findings) >= max_items:
+                        return findings
+                    continue
+                try:
+                    size = file_path.stat().st_size
+                except OSError:
+                    continue
+                if size >= large_file_bytes:
+                    findings.append(
+                        f"包含大体积文件 {self._rel(file_path)}（{size / (1024 * 1024):.1f}MB）"
+                    )
+                    if len(findings) >= max_items:
+                        return findings
+
+        return findings
+
+    def _summarize_vendor_evidence(self, items: list[str], max_items: int = 3) -> str:
+        if not items:
+            return ""
+        if len(items) <= max_items:
+            return "；".join(items)
+        head = "；".join(items[:max_items])
+        return f"{head}；... 共{len(items)}项"
+
+    def _evaluate_vendor_directory(self, vendor_dir: Path) -> tuple[str, str]:
+        static_asset_context = self._is_vendor_static_asset_dir(vendor_dir)
+        reference_hits = self._find_vendor_reference_evidence(vendor_dir) if static_asset_context else []
+        generated_traits = self._collect_vendor_generated_traits(vendor_dir)
+        risky_findings = self._collect_vendor_risky_content_evidence(vendor_dir)
+
+        if risky_findings:
+            risky_desc = self._summarize_vendor_evidence(risky_findings)
+            return (
+                "FAIL",
+                f"vendor 目录包含不合理内容（{risky_desc}），需清理后再交付",
+            )
+
+        if static_asset_context and reference_hits:
+            ref_desc = self._summarize_vendor_evidence(reference_hits)
+            return (
+                "PASS",
+                f"vendor 目录作为前端第三方静态资源被引用（证据: {ref_desc}）",
+            )
+
+        if generated_traits:
+            traits_desc = self._summarize_vendor_evidence(generated_traits)
+            return (
+                "WARN",
+                f"疑似依赖目录，需结合路径与引用确认（命中生成特征: {traits_desc}）",
+            )
+
+        if static_asset_context:
+            return (
+                "WARN",
+                "vendor 位于 static/public/assets 下，但未检出源码引用证据；疑似依赖目录，需结合路径与引用确认",
+            )
+
+        return (
+            "WARN",
+            "检测到 vendor 目录；疑似依赖目录，需结合路径与引用确认",
+        )
 
     def _dir_violation_reason(self, dirname: str) -> str | None:
         lower = dirname.lower()
@@ -5445,8 +5750,9 @@ class PackageValidator:
                 return reason
         return None
 
-    def _check_local_dirty_files(self) -> None:
-        section = self._new_section("13. 本地脏文件检查")
+    def _ensure_dirty_findings_cached(self) -> list[tuple[Path, str, str]]:
+        if self._dirty_findings_cache is not None:
+            return self._dirty_findings_cache
         assert self.root is not None
 
         violations: list[tuple[Path, str, str]] = []
@@ -5463,12 +5769,14 @@ class PackageValidator:
                 dir_path = current_path / dirname
                 if self._is_ignored_by_any_gitignore(dir_path, treat_as_dir=True):
                     continue
+                if dirname.lower() == "vendor":
+                    status, message = self._evaluate_vendor_directory(dir_path)
+                    violations.append((dir_path, message, status))
+                    pruned_dirs.append(dirname)
+                    continue
                 reason = self._dir_violation_reason(dirname)
                 if reason:
-                    if self._is_compile_exempt_dir(dirname):
-                        violations.append((dir_path, reason, "WARN"))
-                    else:
-                        violations.append((dir_path, reason, "FAIL"))
+                    violations.append((dir_path, reason, "FAIL"))
                 else:
                     pruned_dirs.append(dirname)
             dirs[:] = pruned_dirs
@@ -5476,8 +5784,6 @@ class PackageValidator:
             for filename in files:
                 file_path = current_path / filename
                 if file_path.name == "validation_report.md":
-                    continue
-                if self._is_runtime_noise_file(file_path):
                     continue
                 if self._is_ignored_by_any_gitignore(file_path):
                     continue
@@ -5487,6 +5793,8 @@ class PackageValidator:
                         violations.append((file_path, reason, "WARN"))
                     else:
                         violations.append((file_path, reason, "FAIL"))
+                elif file_path.suffix.lower() in DATABASE_FILE_SUFFIXES:
+                    violations.append((file_path, "为数据库文件（建议排除）", "WARN"))
 
         deduped: dict[tuple[str, str, str], tuple[Path, str, str]] = {}
         for path, reason, status in violations:
@@ -5499,6 +5807,11 @@ class PackageValidator:
 
         ordered = sorted(deduped.values(), key=lambda x: (self._rel(x[0]).lower(), x[2], x[1]))
         self._dirty_findings_cache = ordered
+        return ordered
+
+    def _check_local_dirty_files(self) -> None:
+        section = self._new_section("13. 本地脏文件检查")
+        ordered = self._ensure_dirty_findings_cached()
 
         if not ordered:
             section.add_pass("未检测到缓存/依赖/构建产物/数据库等本地脏文件", ".")
@@ -5507,11 +5820,67 @@ class PackageValidator:
                 rel_path = self._rel(path)
                 if path.is_dir():
                     rel_path = rel_path + "/"
-                if status == "WARN":
-                    reason_msg = f"{reason}（编译产物，豁免删除，仅提醒）"
-                    section.add_warn(f"{rel_path} {reason_msg}", rel_path)
+                if status == "PASS":
+                    section.add_pass(reason, rel_path)
+                elif status == "WARN":
+                    section.add_warn(f"{rel_path} {reason}", rel_path)
                 else:
                     section.add_fail(f"{rel_path} {reason}", rel_path)
+
+        self._record_failures()
+
+    @staticmethod
+    def _format_size(size_bytes: int) -> str:
+        if size_bytes >= 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+        if size_bytes >= 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        if size_bytes >= 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        return f"{size_bytes} B"
+
+    def _check_package_size(self) -> None:
+        section = self._new_section("14. 包体积检查")
+        assert self.root is not None
+
+        total_size = 0
+        large_files: list[tuple[Path, int]] = []
+
+        for current_root, dirs, files in os.walk(self.root, topdown=True):
+            dirs[:] = [
+                d for d in sorted(dirs, key=str.lower)
+                if d.lower() not in SIZE_SKIP_DIR_NAMES
+            ]
+            for filename in files:
+                file_path = Path(current_root) / filename
+                try:
+                    file_size = file_path.stat().st_size
+                except OSError:
+                    continue
+                total_size += file_size
+                if file_size > SIZE_WARN_SINGLE_FILE_BYTES:
+                    large_files.append((file_path, file_size))
+
+        large_files.sort(key=lambda x: x[1], reverse=True)
+
+        if large_files:
+            for file_path, file_size in large_files:
+                section.add_warn(
+                    f"大文件: {self._rel(file_path)}（{self._format_size(file_size)}）",
+                    self._rel(file_path),
+                )
+
+        if total_size > SIZE_WARN_TOTAL_BYTES:
+            section.add_warn(
+                f"包体积（不含 original_sessions/.git/.tmp/.backup）为 {self._format_size(total_size)}，超过 {self._format_size(SIZE_WARN_TOTAL_BYTES)} 阈值",
+                ".",
+            )
+
+        if not large_files and total_size <= SIZE_WARN_TOTAL_BYTES:
+            section.add_pass(
+                f"包体积正常: {self._format_size(total_size)}（不含 original_sessions/.git/.tmp/.backup）",
+                ".",
+            )
 
         self._record_failures()
 

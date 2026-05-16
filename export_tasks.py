@@ -2078,6 +2078,64 @@ def remove_validator_tmp(extract_root: Path) -> bool:
     return True
 
 
+def finalize_tmp_audit_renames(extract_root: Path) -> None:
+    """Perform the audit/fix-check renaming in extract_root/.tmp as the last step
+    before packaging so the renamed files are included in the final zip.
+
+    Rules:
+      - If there are exactly 2 audit reports and >=2 fix-checks: rename the
+        second audit + its fix-check to the Codex filenames.
+      - If there are 3+ audit reports: rename the first audit + its fix-check.
+    """
+    try:
+        tmp_dir = extract_root / ".tmp"
+        if not tmp_dir.is_dir():
+            return
+
+        audit_re = re.compile(r"^audit_report-(\d+)\.md$")
+        fix_re = re.compile(r"^audit_report-(\d+)-fix_check\.md$")
+        audits: dict[int, Path] = {}
+        fixes: dict[int, Path] = {}
+        for p in tmp_dir.iterdir():
+            if not p.is_file():
+                continue
+            m = audit_re.match(p.name)
+            if m:
+                audits[int(m.group(1))] = p
+                continue
+            m2 = fix_re.match(p.name)
+            if m2:
+                fixes[int(m2.group(1))] = p
+
+        if not audits:
+            return
+
+        audit_nums = sorted(audits.keys())
+        target_num: int | None = None
+        if len(audit_nums) == 2 and len(fixes) >= 2:
+            target_num = audit_nums[1]
+        elif len(audit_nums) >= 3 and len(fixes) >= 1:
+            target_num = audit_nums[0]
+
+        if target_num is None:
+            return
+
+        audit_path = audits.get(target_num)
+        fix_path = fixes.get(target_num)
+        if audit_path and audit_path.exists():
+            try:
+                audit_path.rename(tmp_dir / "codex_report.md")
+            except OSError:
+                log.debug("failed to rename %s", audit_path)
+        if fix_path and fix_path.exists():
+            try:
+                fix_path.rename(tmp_dir / "codex_report_issues_verification.md")
+            except OSError:
+                log.debug("failed to rename %s", fix_path)
+    except Exception:
+        log.debug("finalize_tmp_audit_renames failed", exc_info=True)
+
+
 def package_sessions_dir_as_zip(extract_root: Path) -> dict[str, Any]:
     """Repackage extract_root/original_sessions/ contents into a single zip
     placed inside original_sessions/ itself (named after the session's `cwd`
@@ -2143,7 +2201,7 @@ def package_sessions_dir_as_zip(extract_root: Path) -> dict[str, Any]:
     }
 
 
-VALIDATOR_SCRIPT_NAME = "validate_package.py"
+VALIDATOR_SCRIPT_NAME = "run_validate.py"
 
 
 class PackageValidationError(RuntimeError):
@@ -2200,6 +2258,60 @@ def _run_validator_on_dir(
         text=True,
     )
 
+    # Adjust .tmp audit/fix-check md filenames per special rules:
+    # - If there are 2 audit reports and 2 fix-check files: rename the second
+    #   audit report to `codex_report.md` and its fix-check to
+    #   `codex_report_issues_verification.md`.
+    # - If there are 3 audit reports: apply the same rename to the first
+    #   audit report and its fix-check (i.e. audit_report-1).
+    try:
+        tmp_dir = extract_root / ".tmp"
+        if tmp_dir.is_dir():
+            audit_re = re.compile(r"^audit_report-(\d+)\.md$")
+            fix_re = re.compile(r"^audit_report-(\d+)-fix_check\.md$")
+            audits = {}
+            fixes = {}
+            for p in tmp_dir.iterdir():
+                if not p.is_file():
+                    continue
+                m = audit_re.match(p.name)
+                if m:
+                    audits[int(m.group(1))] = p
+                    continue
+                m2 = fix_re.match(p.name)
+                if m2:
+                    fixes[int(m2.group(1))] = p
+
+            if audits:
+                audit_nums = sorted(audits.keys())
+                # two audits case
+                if len(audit_nums) == 2 and len(fixes) >= 2:
+                    target_num = audit_nums[1]  # second audit
+                # three audits -> target first audit
+                elif len(audit_nums) >= 3 and len(fixes) >= 1:
+                    target_num = audit_nums[0]  # first audit
+                else:
+                    target_num = None
+
+                if target_num is not None:
+                    audit_path = audits.get(target_num)
+                    fix_path = fixes.get(target_num)
+                    if audit_path and audit_path.exists():
+                        try:
+                            audit_path.rename(tmp_dir / "codex_report.md")
+                        except OSError:
+                            log.debug("failed to rename %s", audit_path)
+                    if fix_path and fix_path.exists():
+                        try:
+                            fix_path.rename(
+                                tmp_dir / "codex_report_issues_verification.md"
+                            )
+                        except OSError:
+                            log.debug("failed to rename %s", fix_path)
+    except Exception:
+        # Non-fatal: don't let renaming break validation artifact collection
+        log.debug(".tmp audit/fix-check rename step failed", exc_info=True)
+
     stdout_path = primary_dir / "validation_stdout.log"
     stderr_path = primary_dir / "validation_stderr.log"
     stdout_path.write_text(result.stdout or "", encoding="utf-8")
@@ -2211,12 +2323,32 @@ def _run_validator_on_dir(
         report_persisted = primary_dir / "validation_report.md"
         shutil.copy2(report_src, report_persisted)
 
+    # Copy renamed audit/fix-check files from .tmp to persist_dirs
+    codex_report_src = extract_root / ".tmp" / "codex_report.md"
+    codex_issues_src = extract_root / ".tmp" / "codex_report_issues_verification.md"
+    codex_report_persisted: Path | None = None
+    codex_issues_persisted: Path | None = None
+    if codex_report_src.is_file():
+        codex_report_persisted = primary_dir / "codex_report.md"
+        shutil.copy2(codex_report_src, codex_report_persisted)
+    if codex_issues_src.is_file():
+        codex_issues_persisted = primary_dir / "codex_report_issues_verification.md"
+        shutil.copy2(codex_issues_src, codex_issues_persisted)
+
     for mirror_dir in persist_dirs[1:]:
         mirror_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(stdout_path, mirror_dir / stdout_path.name)
         shutil.copy2(stderr_path, mirror_dir / stderr_path.name)
         if report_persisted is not None:
             shutil.copy2(report_persisted, mirror_dir / report_persisted.name)
+        if codex_report_persisted is not None:
+            shutil.copy2(
+                codex_report_persisted, mirror_dir / codex_report_persisted.name
+            )
+        if codex_issues_persisted is not None:
+            shutil.copy2(
+                codex_issues_persisted, mirror_dir / codex_issues_persisted.name
+            )
 
     info: dict[str, Any] = {
         "exit_code": result.returncode,
@@ -2605,16 +2737,13 @@ def process_task(
                     task_id,
                     validation_info["report_path"],
                 )
-                # Drop the validator's .tmp/ from the prepared tree -- the
-                # report is already persisted under the task's validation/
-                # folder.
-                if remove_validator_tmp(cloned_repo_dir):
-                    log.debug(
-                        "[%s] removed validator .tmp/ from task root before zipping",
-                        task_id,
-                    )
+                # Keep the validator's .tmp/ in the prepared tree so renamed audit
+                # reports are included in the final deliverable. The report is
+                # already persisted under the task's validation/ folder.
                 if zip_path.exists():
                     zip_path.unlink()
+                # Finalize renames in .tmp so they are included in the shipped zip
+                finalize_tmp_audit_renames(cloned_repo_dir)
                 zip_directory_contents(cloned_repo_dir, zip_path)
                 log.info(
                     "[%s] zipped validated task root (%d bytes)",
@@ -2663,13 +2792,11 @@ def process_task(
                         "[%s] user chose ZIP-ANYWAY; zipping prepared task root despite validation failure",
                         task_id,
                     )
-                    if remove_validator_tmp(cloned_repo_dir):
-                        log.debug(
-                            "[%s] removed validator .tmp/ from task root before zipping",
-                            task_id,
-                        )
+                    # Keep .tmp/ with any renamed audit reports in the deliverable
                     if zip_path.exists():
                         zip_path.unlink()
+                    # Ensure final renames are applied before zipping
+                    finalize_tmp_audit_renames(cloned_repo_dir)
                     zip_directory_contents(cloned_repo_dir, zip_path)
                     validation_info = {
                         "exit_code": 1,
@@ -2693,6 +2820,14 @@ def process_task(
         pass
 
     assert validation_info is not None
+
+    # Apply final renames to any .tmp moved into the task output so the
+    # delivered folder contains the renamed audit/fix-check files as well.
+    try:
+        if moved_tmp:
+            finalize_tmp_audit_renames(task_output_dir)
+    except Exception:
+        log.debug("finalize_tmp_audit_renames on task_output_dir failed", exc_info=True)
 
     return {
         "task_id": task_id,
