@@ -475,7 +475,7 @@ ORIGINAL_SESSIONS_DIR = "original_sessions"
 SESSION_UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
-ALLOWED_NON_UUID_FIRST_LAYER_FILES = {"memory.jsonl"}
+ALLOWED_NON_UUID_FIRST_LAYER_FILES = {"memory.jsonl", "memory.md"}
 SESSION_ARCHIVE_SUFFIXES = {".zip", ".rar", ".7z", ".tar", ".gz"}
 LEADING_SESSION_ZIP_LINUX_PREFIX = "-"
 LEADING_SESSION_ZIP_WINDOWS_PREFIX_RE = re.compile(r"^[A-Za-z]--")
@@ -709,6 +709,13 @@ def get_env_value(names: tuple[str, ...]) -> str | None:
         if value and value.strip():
             return value.strip()
     return None
+
+
+def is_allowed_non_uuid_first_layer_file(filename: str) -> bool:
+    """Check if a filename is allowed as a non-UUID first-layer file in sessions.
+    Checks against ALLOWED_NON_UUID_FIRST_LAYER_FILES with case-insensitive matching.
+    """
+    return filename.lower() in {f.lower() for f in ALLOWED_NON_UUID_FIRST_LAYER_FILES}
 
 
 def sanitize_name(value: str) -> str:
@@ -2686,7 +2693,7 @@ class SessionsValidator(SectionValidator):
                 continue
             if not entry.is_file():
                 continue
-            if entry.name in ALLOWED_NON_UUID_FIRST_LAYER_FILES:
+            if is_allowed_non_uuid_first_layer_file(entry.name):
                 continue
             if entry.suffix.lower() != ".jsonl":
                 failures += 1
@@ -2717,7 +2724,7 @@ class SessionsValidator(SectionValidator):
         checked = 0
         skipped_no_id = 0
         for path in self._first_layer_jsonl(sessions_dir):
-            if path.name in ALLOWED_NON_UUID_FIRST_LAYER_FILES:
+            if is_allowed_non_uuid_first_layer_file(path.name):
                 continue
             if not SESSION_UUID_RE.match(path.stem):
                 # Naming check will already have failed this; skip to avoid
@@ -2856,7 +2863,7 @@ class SessionsValidator(SectionValidator):
     ) -> None:
         candidates: list[tuple[datetime, str, int, Path]] = []
         for jsonl_path in self._first_layer_jsonl(sessions_dir):
-            if jsonl_path.name.lower() == "memory.jsonl":
+            if is_allowed_non_uuid_first_layer_file(jsonl_path.name):
                 continue
             analysis = analyze_jsonl(jsonl_path)
             if (
