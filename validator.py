@@ -1697,6 +1697,7 @@ class StructureValidator(SectionValidator):
     TMP_AUDIT_RE = re.compile(r"^audit_report-(\d+)\.md$")
     TMP_FIX_RE = re.compile(r"^audit_report-(\d+)-fix_check\.md$")
     TMP_REQUIRED_EXTRA = "test_coverage_and_readme_audit_report.md"
+    TMP_OPTIONAL_PROMPT_REQ = "prompt_requirements_verification.md"
 
     TEMP_EXACT_NAMES = {
         "tmp",
@@ -2104,6 +2105,7 @@ class StructureValidator(SectionValidator):
         fix_nums: list[str] = []
         report_files: list[str] = []
         required_extra_count = 0
+        optional_prompt_req = False
 
         for file in files:
             name = file.name
@@ -2115,6 +2117,8 @@ class StructureValidator(SectionValidator):
                 report_files.append(name)
             elif name == self.TMP_REQUIRED_EXTRA:
                 required_extra_count += 1
+            elif name == self.TMP_OPTIONAL_PROMPT_REQ:
+                optional_prompt_req = True
             else:
                 section.add_fail(f"Invalid file in .tmp/: {name}", self._rel(file))
                 layout_failures += 1
@@ -2132,11 +2136,21 @@ class StructureValidator(SectionValidator):
                 rel_tmp,
             )
             layout_failures += 1
-        if len(files) != 5:
+        # Accept either 5 files (standard) or 6 files when the optional
+        # prompt_requirements_verification.md is present. If the optional
+        # file is missing, emit a warning rather than failing.
+        if len(files) not in {5, 6}:
             section.add_fail(
-                f".tmp must contain exactly 5 files, found {len(files)}", rel_tmp
+                f".tmp must contain exactly 5 files (or 6 with prompt_requirements_verification.md), found {len(files)}",
+                rel_tmp,
             )
             layout_failures += 1
+        # Warn if the optional prompt requirements file is not present.
+        if not optional_prompt_req:
+            section.add_warn(
+                "Optional file missing: prompt_requirements_verification.md in .tmp/",
+                rel_tmp,
+            )
 
         if len(fix_nums) not in {1, 2}:
             section.add_fail(
@@ -2161,7 +2175,7 @@ class StructureValidator(SectionValidator):
 
         if layout_failures == 0:
             section.add_pass(
-                ".tmp/ layout is valid (5 files, audit/fix-check pairing)", rel_tmp
+                ".tmp/ layout is valid (5-6 files, audit/fix-check pairing)", rel_tmp
             )
 
 
