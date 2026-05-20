@@ -3145,8 +3145,10 @@ class SessionsValidator(SectionValidator):
                 section.add_fail(f"JSON file is invalid: {exc.msg}", self._rel(path))
                 json_failures += 1
                 continue
-            if not isinstance(parsed, dict):
-                section.add_fail("JSON file root must be an object", self._rel(path))
+            if not isinstance(parsed, dict) and not isinstance(parsed, list):
+                section.add_fail(
+                    "JSON file root must be an object or array", self._rel(path)
+                )
                 json_failures += 1
 
         jsonl_failures = 0
