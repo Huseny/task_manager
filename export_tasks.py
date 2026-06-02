@@ -45,7 +45,8 @@ For each task ID in --task-ids-file, this script:
      listing every offender.
  12. Moves the repo's `.tmp/` (if any) out to `<output>/TASK-<id>/.tmp` so
      it is excluded from the shipped zip.
- 13. Packages `original_sessions/` into a single zip.
+ 13. Packages `original_sessions/` into a single zip, preserving the original
+     archive basename instead of renaming it from session contents.
  14. Runs `validate_packages.py` against the prepared task root.
  15. On pass: zips the validated task root once and ships that zip.
  16. Cleans up the per-task work dir (unless --keep-work-dir).
@@ -128,16 +129,9 @@ For each successful task <id>:
     report.json                        # Run-level + per-task summary.
 
 Inside `TASK-<id>.zip`, sessions are NOT shipped as a folder. After
-validation passes, `original_sessions/` is replaced with a single zip whose
-name mirrors how Claude Code names project folders -- e.g. for a session
-whose `cwd` is `/home/husen/Desktop/eaglepoint/mindflow/TASK-req-a5bb44e7de20`,
-the inner zip is named:
-
-    -home-husen-Desktop-eaglepoint-mindflow-TASK-req-a5bb44e7de20.zip
-
-The basename is derived from the first non-empty `cwd` found in any session
-JSONL (memory.jsonl is skipped). The sanitization rule matches Claude:
-collapse any run of non-`[A-Za-z0-9._]` characters into a single `-`.
+validation passes, `original_sessions/` is replaced with a single zip that
+keeps the original archive basename from the download step instead of being
+renamed from session contents.
 
 The inner sessions zip contains a top-level wrapper folder named after the
 zip basename, and session JSONLs sit under that folder.
@@ -1094,14 +1088,36 @@ def clone_repo(repo_url: str, github_pat: str, target_dir: Path) -> None:
     )
 
 
-def download_file(url: str, out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+def _download_filename_from_response(
+    response: Any, fallback_name: str | None = None
+) -> str:
+    candidate = ""
+    get_filename = getattr(response.headers, "get_filename", None)
+    if callable(get_filename):
+        try:
+            candidate = str(get_filename() or "")
+        except Exception:
+            candidate = ""
+    if candidate:
+        return Path(candidate).name
+    if fallback_name:
+        return Path(fallback_name).name
+    return "sessions.zip"
+
+
+def download_file(url: str, out_dir: Path) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
     if is_google_drive_url(url):
-        download_google_drive_file(url, out_path)
-    else:
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req) as response, out_path.open("wb") as handle:
+        return download_google_drive_file(url, out_dir)
+
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req) as response:
+        fallback_name = Path(urllib.parse.urlsplit(url).path).name or None
+        filename = _download_filename_from_response(response, fallback_name)
+        out_path = out_dir / filename
+        with out_path.open("wb") as handle:
             shutil.copyfileobj(response, handle)
+    return out_path
 
 
 def is_google_drive_url(url: str) -> bool:
@@ -1125,9 +1141,9 @@ def extract_google_drive_file_id(url: str) -> str | None:
 def _download_with_opener(
     opener: urllib.request.OpenerDirector,
     url: str,
-    out_path: Path,
+    out_dir: Path,
     cookie_jar: http.cookiejar.CookieJar,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, Path | None]:
     req = urllib.request.Request(url, method="GET")
     with opener.open(req) as response:
         content_type = (response.headers.get("Content-Type") or "").lower()
@@ -1136,9 +1152,11 @@ def _download_with_opener(
         ).lower()
 
         if "attachment" in content_disposition or "application/zip" in content_type:
+            filename = _download_filename_from_response(response)
+            out_path = out_dir / filename
             with out_path.open("wb") as handle:
                 shutil.copyfileobj(response, handle)
-            return True, ""
+            return True, "", out_path
 
         body = response.read().decode("utf-8", errors="replace")
 
@@ -1153,10 +1171,10 @@ def _download_with_opener(
         if match:
             confirm_token = match.group(1)
 
-    return False, confirm_token
+    return False, confirm_token, None
 
 
-def download_google_drive_file(url: str, out_path: Path) -> None:
+def download_google_drive_file(url: str, out_dir: Path) -> Path:
     file_id = extract_google_drive_file_id(url)
     if not file_id:
         raise ValueError(f"Could not extract Google Drive file id from URL: {url}")
@@ -1168,10 +1186,10 @@ def download_google_drive_file(url: str, out_path: Path) -> None:
         "https://drive.google.com/uc?export=download&id="
         f"{urllib.parse.quote(file_id, safe='')}"
     )
-    downloaded, confirm_token = _download_with_opener(
+    downloaded, confirm_token, out_path = _download_with_opener(
         opener=opener,
         url=base_url,
-        out_path=out_path,
+        out_dir=out_dir,
         cookie_jar=cookie_jar,
     )
     if not downloaded:
@@ -1182,19 +1200,24 @@ def download_google_drive_file(url: str, out_path: Path) -> None:
             f"&confirm={urllib.parse.quote(confirm_token, safe='')}"
             f"&id={urllib.parse.quote(file_id, safe='')}"
         )
-        downloaded, _ = _download_with_opener(
+        downloaded, _, out_path = _download_with_opener(
             opener=opener,
             url=confirmed_url,
-            out_path=out_path,
+            out_dir=out_dir,
             cookie_jar=cookie_jar,
         )
         if not downloaded:
             raise ValueError("Google Drive file download failed after confirmation")
 
+    if out_path is None:
+        raise ValueError("Google Drive file download did not produce an archive path")
+
     if not (zipfile.is_zipfile(out_path) or is_rar_file(out_path)):
         raise ValueError(
             "Downloaded Google Drive file is not a valid zip or rar archive"
         )
+
+    return out_path
 
 
 def extract_zip(zip_path: Path, extract_dir: Path) -> None:
@@ -2040,26 +2063,6 @@ def _read_cwd_from_jsonl(path: Path) -> str | None:
     return None
 
 
-def _claude_project_name_from_cwd(cwd: str) -> str:
-    """Match Claude's project folder naming: replace any non-[A-Za-z0-9._] run
-    with a single '-'. An absolute POSIX path /home/husen/foo becomes
-    -home-husen-foo.
-    """
-    return re.sub(r"[^A-Za-z0-9._]+", "-", cwd)
-
-
-def _derive_sessions_zip_basename(sessions_dir: Path) -> str | None:
-    for jsonl in sorted(sessions_dir.rglob("*.jsonl")):
-        if not jsonl.is_file():
-            continue
-        if jsonl.name.lower() == "memory.jsonl":
-            continue
-        cwd = _read_cwd_from_jsonl(jsonl)
-        if cwd:
-            return _claude_project_name_from_cwd(cwd)
-    return None
-
-
 def remove_validator_tmp(extract_root: Path) -> bool:
     """Delete the `.tmp/` directory the validator creates inside extract_root
     (it holds validation_report.md, which we already persist to the task's
@@ -2136,24 +2139,18 @@ def finalize_tmp_audit_renames(extract_root: Path) -> None:
         log.debug("finalize_tmp_audit_renames failed", exc_info=True)
 
 
-def package_sessions_dir_as_zip(extract_root: Path) -> dict[str, Any]:
+def package_sessions_dir_as_zip(extract_root: Path, zip_basename: str) -> dict[str, Any]:
     """Repackage extract_root/original_sessions/ contents into a single zip
-    placed inside original_sessions/ itself (named after the session's `cwd`
-    field, Claude-project-folder style). The original loose files are removed
-    so the directory ends up containing only the zip.
+    placed inside original_sessions/ itself. The zip keeps the original
+    archive basename rather than being renamed from session contents.
+    The original loose files are removed so the directory ends up containing
+    only the zip.
     """
     sessions_dir = extract_root / "original_sessions"
     if not sessions_dir.is_dir():
         return {"performed": False, "reason": "no_sessions_dir"}
 
-    basename = _derive_sessions_zip_basename(sessions_dir)
-    if not basename:
-        log.warning(
-            "sessions-zip: no `cwd` found in any session JSONL under %s; "
-            "leaving original_sessions/ folder as-is",
-            sessions_dir,
-        )
-        return {"performed": False, "reason": "no_cwd_in_sessions"}
+    basename = zip_basename.strip() or "sessions"
 
     # Build zip outside sessions_dir first so we don't archive the zip into
     # itself, then move it back inside after clearing the loose contents.
@@ -2201,7 +2198,7 @@ def package_sessions_dir_as_zip(extract_root: Path) -> dict[str, Any]:
     }
 
 
-VALIDATOR_SCRIPT_NAME = "run_validate.py"
+VALIDATOR_SCRIPT_NAME = "validate_package.py"
 
 
 class PackageValidationError(RuntimeError):
@@ -2460,9 +2457,8 @@ def process_task(
         project_info_sync.get("fields_changed", []),
     )
 
-    sessions_zip_path = task_work_dir / "sessions.zip"
+    sessions_zip_path = download_file(sessions_zip_url, task_work_dir)
     log.info("[%s] downloading sessions archive -> %s", task_id, sessions_zip_path)
-    download_file(sessions_zip_url, sessions_zip_path)
     log.info(
         "[%s] download complete (%d bytes)",
         task_id,
@@ -2642,7 +2638,9 @@ def process_task(
         log.debug("[%s] pruned paths: %s", task_id, prune_stats["removed_paths"])
 
     log.info("[%s] packaging original_sessions as a zip", task_id)
-    sessions_zip_info = package_sessions_dir_as_zip(cloned_repo_dir)
+    sessions_zip_info = package_sessions_dir_as_zip(
+        cloned_repo_dir, sessions_zip_path.stem
+    )
     if sessions_zip_info.get("performed", False):
         log.info(
             "[%s] sessions zip packaged as %s",
